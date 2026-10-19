@@ -204,6 +204,15 @@ assert_output_is_not_empty_by_jq() {
   assert_status 64
 }
 
+@test "fixture with a sound-effects pointer decodes (effects mirror field)" {
+  # devices.json carries `defaultSystemOutput`; the remaining fixtures omit it,
+  # so the suite covers both decode paths. The mirror itself is write-side and
+  # asserted by the unit tests.
+  run $BIN "${FLAGS[@]}" current output
+  assert_success
+  assert_output_is "Jabra Evolve 75 SE"
+}
+
 @test "unknown direction exits EX_USAGE" {
   run $BIN "${FLAGS[@]}" current sideways
   assert_failure

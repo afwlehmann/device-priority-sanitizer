@@ -35,10 +35,12 @@ func loadConfig(_ explicitPath: String?) throws -> AppConfig {
 }
 
 /// Real CoreAudio unless a fixture table was injected (headless test seam).
-func makeSource(from options: Options) throws -> DeviceSource {
-    guard let devicesPath = options.devicesPath else { return CoreAudioDeviceSource() }
+func makeSource(from options: Options, config: AppConfig) throws -> DeviceSource {
+    guard let devicesPath = options.devicesPath else {
+        return CoreAudioDeviceSource(manageSoundEffects: config.managesSoundEffects)
+    }
     do {
-        return try FixtureDeviceSource(path: devicesPath)
+        return try FixtureDeviceSource(path: devicesPath, manageSoundEffects: config.managesSoundEffects)
     } catch {
         throw CliFailure.dataInvalid("invalid devices fixture \(devicesPath): \(error)")
     }
@@ -313,7 +315,7 @@ func bootstrap() throws -> (options: Options, config: AppConfig, engine: Priorit
     } catch let error as PriorityEngine.InvalidRegexError {
         throw CliFailure.dataInvalid("\(error)")
     }
-    let source = try makeSource(from: options)
+    let source = try makeSource(from: options, config: config)
     return (options, config, engine, source)
 }
 

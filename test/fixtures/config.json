@@ -10,5 +10,6 @@
     { "match": "MacBook Pro Microphone|Built-in", "symbol": "laptopcomputer" }
   ],
   "fallbackSymbol": { "output": "speaker.wave.3", "input": "mic" },
-  "debounceMs": 500
+  "debounceMs": 500,
+  "manageSoundEffects": true
 }

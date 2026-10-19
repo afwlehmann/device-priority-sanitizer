@@ -24,10 +24,14 @@ struct AppConfig: Codable, Equatable, Sendable {
     var inputs: [PriorityEntry]
     var fallbackSymbol: FallbackSymbols?
     var debounceMs: Int?
+    var manageSoundEffects: Bool? = nil
 
     var debounceInterval: TimeInterval {
         Double(debounceMs ?? 500) / 1000.0
     }
+
+    /// Sound effects/alert device follows the default output unless disabled.
+    var managesSoundEffects: Bool { manageSoundEffects ?? true }
 
     func entries(for direction: Direction) -> [PriorityEntry] {
         direction == .output ? outputs : inputs

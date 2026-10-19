@@ -11,5 +11,6 @@
     { "uid": "teams", "name": "Microsoft Teams Audio", "transport": "virtual", "isOutput": true, "isInput": true }
   ],
   "defaultOutput": "evolve",
-  "defaultInput": "evolve"
+  "defaultInput": "evolve",
+  "defaultSystemOutput": "spk"
 }

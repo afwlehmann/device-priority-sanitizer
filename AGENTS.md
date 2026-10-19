@@ -43,13 +43,20 @@ built with the nixpkgs Swift toolchain via plain `swiftc`.
 - **Transport classification** (`TransportClass.isSynthetic`) is the single
   place deciding menu visibility and auto-selection eligibility — extending
   to AirPlay-as-managed is a one-place change.
+- **Sound effects follow the output**: every write path funnels through
+  `DeviceSource.setDefault`, and both implementations also set
+  `kAudioHardwarePropertyDefaultSystemOutputDevice` on an output write — so
+  alerts/beeps play on the active speaker like System Settings does. Disable
+  with `manageSoundEffects = false` in the config JSON (CLI default: true);
+  an input write never touches the effects slot.
 
 ## Test seams
 
 - `--devices <file>` injects a `FixtureData` JSON table (see
   `test/fixtures/`); combined with `--dry-run` every CLI behavior is
   observable without hardware. Real writes against a fixture are refused
-  (EX_USAGE).
+  (EX_USAGE). The optional `defaultSystemOutput` field seeds the
+  sound-effects pointer (fixtures without it still decode).
 - `--menu-text` renders the dropdown as deterministic text (submenus, ✓
   markers, symbol per device, excluded-current info row).
 - `auto` (hidden) models the GUI's automatic path — list change → per-direction
@@ -60,9 +67,9 @@ built with the nixpkgs Swift toolchain via plain `swiftc`.
 - **Unit tests** (`Tests/AudioPrioritySanitizerTests/`): pure-logic suite
   (tier matching incl. the documented Jabra headset-vs-speaker example, regex
   semantics, cycle order/wrap, symbol mapping, plan/perform semantics,
-  deterministic menu text, fixture source units). Compiled with plain
-  `swiftc` into `audio-priority-sanitizer-unit-tests`; entry file is
-  `main.swift` (swiftc requires that name for top-level code).
+  sound-effects mirroring, deterministic menu text, fixture source units).
+  Compiled with plain `swiftc` into `audio-priority-sanitizer-unit-tests`;
+  entry file is `main.swift` (swiftc requires that name for top-level code).
   **Why not Swift Testing/XCTest**: SwiftPM cannot run under the nix sandbox
   (its manifest compiler links against `/usr/lib/swift`, which the sandboxed
   toolchain cannot resolve — cc-wrapper target mismatch). The harness is a

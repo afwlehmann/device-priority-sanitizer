@@ -47,15 +47,25 @@ func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: String) th
 final class OverlaySource: DeviceSource {
     private let devices: [AudioDevice]
     private var current: [Direction: AudioDevice?]
+    private let manageSoundEffects: Bool
+    private(set) var systemOutput: AudioDevice?
     private(set) var usageCount = 0
 
-    init(devices: [AudioDevice], currentOutput: String?, currentInput: String?) {
+    init(
+        devices: [AudioDevice],
+        currentOutput: String?,
+        currentInput: String?,
+        systemOutput: String? = nil,
+        manageSoundEffects: Bool = true
+    ) {
         self.devices = devices
+        self.manageSoundEffects = manageSoundEffects
         let byUID = Dictionary(uniqueKeysWithValues: devices.map { ($0.uid, $0) })
         current = [
             .output: currentOutput.flatMap { byUID[$0] },
             .input: currentInput.flatMap { byUID[$0] },
         ]
+        self.systemOutput = systemOutput.flatMap { byUID[$0] }
     }
 
     func allDevices() -> [AudioDevice] { devices }
@@ -68,6 +78,9 @@ final class OverlaySource: DeviceSource {
     func setDefault(_ device: AudioDevice, direction: Direction) -> OSStatus {
         usageCount += 1
         current[direction] = device
+        if direction == .output, manageSoundEffects {
+            systemOutput = device
+        }
         return noErr
     }
 }
@@ -117,7 +130,15 @@ enum Fixtures {
         )
     }
 
-    static func overlay(output: String?, input: String?) -> OverlaySource {
-        OverlaySource(devices: devices(), currentOutput: output, currentInput: input)
+    static func overlay(
+        output: String?,
+        input: String?,
+        systemOutput: String? = nil,
+        manageSoundEffects: Bool = true
+    ) -> OverlaySource {
+        OverlaySource(
+            devices: devices(), currentOutput: output, currentInput: input,
+            systemOutput: systemOutput, manageSoundEffects: manageSoundEffects
+        )
     }
 }

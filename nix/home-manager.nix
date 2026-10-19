@@ -52,6 +52,7 @@ let
       inputs = cfg.inputs;
       fallbackSymbol = cfg.fallbackSymbol;
       debounceMs = cfg.debounceMs;
+      manageSoundEffects = cfg.manageSoundEffects;
     }
   );
 
@@ -150,6 +151,18 @@ in
       description = ''
         Debounce window for `kAudioHardwarePropertyDevices` churn — multiple
         rapid device-list notifications coalesce into one priority pass.
+      '';
+    };
+
+    manageSoundEffects = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Mirror the macOS sound-effects/alert device
+        (`kAudioHardwarePropertyDefaultSystemOutputDevice`) whenever this app
+        sets the output device, matching what changing the output device in
+        System Settings does. Set to `false` to leave the effects device
+        untouched, e.g. to pin alerts to a specific device.
       '';
     };
   };

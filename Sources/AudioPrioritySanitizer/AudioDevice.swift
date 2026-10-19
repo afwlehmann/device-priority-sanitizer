@@ -143,6 +143,12 @@ private func transportClass(for raw: UInt32) -> TransportClass {
 // MARK: - Real source
 
 final class CoreAudioDeviceSource: DeviceSource {
+    private let manageSoundEffects: Bool
+
+    init(manageSoundEffects: Bool = true) {
+        self.manageSoundEffects = manageSoundEffects
+    }
+
     func allDevices() -> [AudioDevice] {
         var addr = propertyAddress(kAudioHardwarePropertyDevices)
         var size: UInt32 = 0
@@ -162,7 +168,17 @@ final class CoreAudioDeviceSource: DeviceSource {
     }
 
     func setDefault(_ device: AudioDevice, direction: Direction) -> OSStatus {
-        var addr = propertyAddress(direction.defaultDeviceSelector)
+        let primary = writeDefaultDevice(device, selector: direction.defaultDeviceSelector)
+        guard primary == noErr else { return primary }
+        guard direction == .output, manageSoundEffects else { return primary }
+        return writeDefaultDevice(device, selector: kAudioHardwarePropertyDefaultSystemOutputDevice)
+    }
+
+    private func writeDefaultDevice(
+        _ device: AudioDevice,
+        selector: AudioObjectPropertySelector
+    ) -> OSStatus {
+        var addr = propertyAddress(selector)
         var value = device.id
         let size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
@@ -202,6 +218,7 @@ struct FixtureData: Codable, Sendable {
     let devices: [FixtureDevice]
     let defaultOutput: String?
     let defaultInput: String?
+    let defaultSystemOutput: String?
 }
 
 /// In-memory device table. The pure initializer takes decoded fixture data;
@@ -210,14 +227,24 @@ struct FixtureData: Codable, Sendable {
 /// refuses fixture-mode writes without `--dry-run`.
 final class FixtureDeviceSource: DeviceSource {
     private let devices: [AudioDevice]
+    private let manageSoundEffects: Bool
     private var currentUIDs: [Direction: String]
+    private var systemOutputUID: String?
 
-    init(devices: [AudioDevice], defaultOutput: String?, defaultInput: String?) {
+    init(
+        devices: [AudioDevice],
+        defaultOutput: String?,
+        defaultInput: String?,
+        defaultSystemOutput: String? = nil,
+        manageSoundEffects: Bool = true
+    ) {
         self.devices = devices
+        self.manageSoundEffects = manageSoundEffects
         currentUIDs = [.output: defaultOutput ?? "", .input: defaultInput ?? ""]
+        systemOutputUID = defaultSystemOutput
     }
 
-    convenience init(path: String) throws {
+    convenience init(path: String, manageSoundEffects: Bool = true) throws {
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         let fixture = try JSONDecoder().decode(FixtureData.self, from: data)
         self.init(
@@ -230,7 +257,8 @@ final class FixtureDeviceSource: DeviceSource {
                     isOutput: fixtureDevice.isOutput,
                     isInput: fixtureDevice.isInput
                 )
-            }, defaultOutput: fixture.defaultOutput, defaultInput: fixture.defaultInput)
+            }, defaultOutput: fixture.defaultOutput, defaultInput: fixture.defaultInput,
+            defaultSystemOutput: fixture.defaultSystemOutput, manageSoundEffects: manageSoundEffects)
     }
 
     func allDevices() -> [AudioDevice] { devices }
@@ -240,8 +268,18 @@ final class FixtureDeviceSource: DeviceSource {
         return devices.first { $0.uid == uid }
     }
 
+    /// The sound-effects/alert pointer (test observation; mirrors the default
+    /// output when `manageSoundEffects` is enabled).
+    func systemOutputDevice() -> AudioDevice? {
+        guard let uid = systemOutputUID, !uid.isEmpty else { return nil }
+        return devices.first { $0.uid == uid }
+    }
+
     func setDefault(_ device: AudioDevice, direction: Direction) -> OSStatus {
         currentUIDs[direction] = device.uid
+        if direction == .output, manageSoundEffects {
+            systemOutputUID = device.uid
+        }
         return noErr
     }
 }

@@ -257,6 +257,16 @@ func runUnitTests() {
         try expectEqual(config.fallback(for: .input), "mic", "default input fallback")
     }
 
+    run("sound-effects management defaults to enabled and decodes explicit false") {
+        let defaults = AppConfig(outputs: [], inputs: [], fallbackSymbol: nil, debounceMs: nil)
+        try check(defaults.managesSoundEffects, "missing field means enabled")
+        let config = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"outputs": [], "inputs": [], "manageSoundEffects": false}"#.utf8)
+        )
+        try check(!config.managesSoundEffects, "explicit false disables the mirror")
+    }
+
     // MARK: Device resolution (CLI set semantics)
 
     run("exact match wins over substring") {
@@ -351,6 +361,43 @@ func runUnitTests() {
         try expectEqual(source.usageCount, 0, "no writes may happen")
     }
 
+    // MARK: Sound-effects mirroring (output writes also move the alert device)
+
+    run("output writes mirror the sound-effects device") {
+        let source = Fixtures.overlay(output: "spk", input: "mic", systemOutput: "spk")
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        _ = source.setDefault(evolve, direction: .output)
+        try expectEqual(source.defaultDevice(for: .output)?.uid, "evolve", "output set")
+        try expectEqual(source.systemOutput?.uid, "evolve", "effects device follows output")
+    }
+
+    run("input writes leave the sound-effects device untouched") {
+        let source = Fixtures.overlay(output: "spk", input: "mic", systemOutput: "spk")
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        _ = source.setDefault(evolve, direction: .input)
+        try expectEqual(source.defaultDevice(for: .input)?.uid, "evolve", "input set")
+        try expectEqual(source.systemOutput?.uid, "spk", "effects device unchanged")
+    }
+
+    run("disabled sound-effects management leaves the effects device untouched") {
+        let source = Fixtures.overlay(
+            output: "spk", input: "mic", systemOutput: "spk", manageSoundEffects: false
+        )
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        _ = source.setDefault(evolve, direction: .output)
+        try expectEqual(source.defaultDevice(for: .output)?.uid, "evolve", "output set")
+        try expectEqual(source.systemOutput?.uid, "spk", "effects device unchanged")
+    }
+
+    run("applying a plan mirrors the effects device with the output") {
+        let engine = try Fixtures.engine()
+        let source = Fixtures.overlay(output: "jabra510", input: "mic", systemOutput: "jabra510")
+        let plan = planApply(source: source, engine: engine, devices: Fixtures.devices(), force: true)
+        try performPlan(plan, on: source, dryRun: false)
+        try expectEqual(source.defaultDevice(for: .output)?.uid, "evolve", "output after apply")
+        try expectEqual(source.systemOutput?.uid, "evolve", "effects device after apply")
+    }
+
     // MARK: FixtureSource (in-memory device table unit)
 
     run("fixture loads devices and current pointers") {
@@ -370,6 +417,27 @@ func runUnitTests() {
         _ = source.setDefault(spk, direction: .output)
         try expectEqual(source.defaultDevice(for: .output)?.uid, "spk", "output changed")
         try expectEqual(source.defaultDevice(for: .input)?.uid, "mic", "input unchanged")
+    }
+
+    run("fixture source mirrors effects on output and records its initial pointer") {
+        let source = FixtureDeviceSource(
+            devices: Fixtures.devices(), defaultOutput: "spk", defaultInput: "mic",
+            defaultSystemOutput: "dell"
+        )
+        try expectEqual(source.systemOutputDevice()?.uid, "dell", "initial effects pointer")
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        _ = source.setDefault(evolve, direction: .output)
+        try expectEqual(source.systemOutputDevice()?.uid, "evolve", "mirrored effects pointer")
+    }
+
+    run("fixture source honors disabled effects management") {
+        let source = FixtureDeviceSource(
+            devices: Fixtures.devices(), defaultOutput: "spk", defaultInput: "mic",
+            defaultSystemOutput: "dell", manageSoundEffects: false
+        )
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        _ = source.setDefault(evolve, direction: .output)
+        try expectEqual(source.systemOutputDevice()?.uid, "dell", "effects pointer untouched")
     }
 
     run("missing current pointer yields nil") {
