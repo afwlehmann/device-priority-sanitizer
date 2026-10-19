@@ -57,11 +57,15 @@ let
 
   logDir = "${config.home.homeDirectory}/Library/Logs/audio-priority-sanitizer";
 
-  # Truncates the agent log on every launch (including KeepAlive crash
-  # restarts) to bound growth, then execs the app with the store-path config.
+  # Creates the log directory, truncates the agent log on every launch
+  # (including KeepAlive crash restarts) to bound growth, then execs the app
+  # with the store-path config. The config is passed as `--config`: a bare
+  # positional argument would be parsed as a CLI command.
   agentWrapper = pkgs.writeShellScript "audio-priority-sanitizer-agent" ''
+    ${pkgs.coreutils}/bin/mkdir -p "${logDir}"
     ${pkgs.coreutils}/bin/truncate -s 0 "${logDir}/agent.log" 2>/dev/null || true
-    exec "${pkg}/Applications/audio-priority-sanitizer.app/Contents/MacOS/audio-priority-sanitizer" "${configJson}"
+    exec "${pkg}/Applications/audio-priority-sanitizer.app/Contents/MacOS/audio-priority-sanitizer" \
+      --config "${configJson}"
   '';
 
   raycastCommands = [
@@ -151,7 +155,7 @@ in
     }
     // (builtins.listToAttrs (
       map (name: {
-        inherit name;
+        name = "Applications/${name}";
         value = {
           executable = true;
           source = "${pkg}/bin/${name}";

@@ -124,7 +124,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var devices: [AudioDevice] = []
     private var previousSets: [Direction: Set<String>] = [:]
     private var debounceTimer: Timer?
-    private var listenerBlocks: [Any] = []
+    private struct RegisteredListener {
+        let address: AudioObjectPropertyAddress
+        let block: AudioObjectPropertyListenerBlock
+    }
+
+    private var listeners: [RegisteredListener] = []
 
     init(config: AppConfig, source: DeviceSource, engine: PriorityEngine) {
         self.config = config
@@ -137,7 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuController.onSelect = { [weak self] direction, device in
             guard let self = self else { return }
-            self.source.setDefault(device, direction: direction)
+            let status = self.source.setDefault(device, direction: direction)
+            if status != noErr {
+                logStderr("failed to select \(device.name): OSStatus \(status)")
+            }
             self.refreshMenu()
         }
         menuController.onCycle = { [weak self] direction in
@@ -148,7 +156,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     direction, current: current, devices: self.devices
                 )
             else { return }
-            self.source.setDefault(target, direction: direction)
+            let status = self.source.setDefault(target, direction: direction)
+            if status != noErr {
+                logStderr("failed to cycle \(direction.rawValue) to \(target.name): OSStatus \(status)")
+            }
             self.refreshMenu()
         }
         menuController.onReapply = { [weak self] in
@@ -160,7 +171,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 devices: self.devices,
                 force: true
             )
-            try? performPlan(plan, on: self.source, dryRun: false)
+            do {
+                try performPlan(plan, on: self.source, dryRun: false)
+            } catch {
+                logStderr("\(error)")
+            }
             self.refreshMenu()
         }
 
@@ -180,9 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mElement: kAudioObjectPropertyElementMain
         )
         let observer: AudioObjectPropertyListenerBlock = { _, _ in handler() }
-        // CoreAudio drops listeners on coreaudiod restart; keep the block
-        // alive for as long as the app runs so the registration is stable.
-        listenerBlocks.append(observer)
+        listeners.append(RegisteredListener(address: addr, block: observer))
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
         let status = AudioObjectAddPropertyListenerBlock(systemObject, &addr, .main, observer)
         if status != noErr {
@@ -190,11 +203,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func removeListeners() {
+        let systemObject = AudioObjectID(kAudioObjectSystemObject)
+        for listener in listeners {
+            var addr = listener.address
+            AudioObjectRemovePropertyListenerBlock(systemObject, &addr, .main, listener.block)
+        }
+        listeners.removeAll()
+    }
+
     private func registerListeners() {
         addListener(kAudioHardwarePropertyDevices) { [weak self] in self?.deviceListChanged() }
         addListener(kAudioHardwarePropertyDefaultOutputDevice) { [weak self] in self?.defaultsChanged() }
         addListener(kAudioHardwarePropertyDefaultInputDevice) { [weak self] in self?.defaultsChanged() }
-        // coreaudiod restarts drop all listeners — re-register and re-apply.
         addListener(kAudioHardwarePropertyServiceRestarted) { [weak self] in self?.serviceRestarted() }
     }
 
@@ -216,6 +237,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func serviceRestarted() {
         logStderr("coreaudiod restarted — re-registering listeners")
+        // CoreAudio drops every property listener when the service restarts.
+        removeListeners()
+        registerListeners()
         reloadAndApply(initial: true)
     }
 

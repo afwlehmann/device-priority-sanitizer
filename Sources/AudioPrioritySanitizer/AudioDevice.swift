@@ -107,11 +107,17 @@ private func channelCount(_ device: AudioDeviceID, scope: AudioObjectPropertySco
     var addr = propertyAddress(kAudioDevicePropertyStreamConfiguration, scope: scope)
     var size: UInt32 = 0
     guard AudioObjectGetPropertyDataSize(device, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
-    let buffer = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-    defer { buffer.deallocate() }
-    let status = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, buffer)
+    // The buffer list is variable-length: one AudioBuffer per stream, so the
+    // allocation must span the full property size (not a single AudioBufferList).
+    let raw = UnsafeMutableRawPointer.allocate(
+        byteCount: Int(size),
+        alignment: MemoryLayout<AudioBufferList>.alignment
+    )
+    defer { raw.deallocate() }
+    let bufferList = raw.assumingMemoryBound(to: AudioBufferList.self)
+    let status = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, bufferList)
     guard status == noErr else { return 0 }
-    return UnsafeMutableAudioBufferListPointer(buffer).reduce(0) { $0 + Int($1.mNumberChannels) }
+    return UnsafeMutableAudioBufferListPointer(bufferList).reduce(0) { $0 + Int($1.mNumberChannels) }
 }
 
 /// 'blue' — kAudioDeviceTransportTypeBluetoothA2DP is not exported to Swift

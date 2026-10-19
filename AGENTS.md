@@ -31,6 +31,8 @@ built with the nixpkgs Swift toolchain via plain `swiftc`.
 - **Auto-selection semantics** (see root [AGENTS.md](../../AGENTS.md)):
   - Applied only on a per-direction device-*set* change (output and input are
     fully independent).
+  - Applied once at agent start (login/reboot); this is the deliberate
+    exception to "a manual pick persists until its direction's set changes".
   - The current device wins within its tier: equivalent tier members
     (several headsets) never churn into each other.
   - A synthetic-transport current device (virtual/aggregate/AirPlay) is left
@@ -73,7 +75,7 @@ built with the nixpkgs Swift toolchain via plain `swiftc`.
   (64 EX_USAGE, 65 EX_DATAERR, 66 EX_NOINPUT, 3 ambiguous, 70 EX_SOFTWARE).
   Flake check: `checks.audio-priority-sanitizer-cli`.
 - **Format**: `checks.audio-priority-sanitizer-format` verifies the Swift
-  sources are a fixed point of `swift-format` (2-space indent via
+  sources are a fixed point of `swift-format` (4-space indent / 120 cols via
   `.swift-format`; same gate as nixfmt/ruff-format in this repo).
 
 ## CLI
