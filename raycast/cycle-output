@@ -4,7 +4,7 @@
 # @raycast.title Audio Priority: Cycle Output
 # @raycast.mode silent
 # @raycast.icon 🔊
-# @raycast.description Advance the default output device to the next visible one (wrapping).
+# @raycast.description Manually override the priority order: advance the default output device to the next visible one (wrapping).
 # @raycast.author Alexander Lehmann
 # @raycast.packageName Audio Priority Sanitizer
 

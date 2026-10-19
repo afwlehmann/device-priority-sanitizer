@@ -100,6 +100,13 @@ audio-priority-sanitizer auto             # hidden test seam
 - `set`: exact name first, then case-insensitive substring; multiple exact
   matches (two identical devices) and multiple substring matches are ambiguous
   → exit 3 with candidate list; no match → EX_NOINPUT.
+- `cycle`: the manual override for when the wanted device is *not* the
+  highest priority. Advances to the next managed device in visible menu order
+  (wrapping, synthetic devices skipped), so it can be bound to a hotkey
+  (Raycast `cycle-output`/`cycle-input`) for headset↔speaker switching
+  without naming devices or opening System Settings. The pick persists until
+  that direction's device set changes, so auto-selection does not immediately
+  undo it.
 - `list` includes excluded (synthetic) devices, tagged `[virtual]` etc.;
   `--json` adds `excluded`/`transport`/`current` fields.
 - Trailing positional arguments a command does not consume are rejected with
