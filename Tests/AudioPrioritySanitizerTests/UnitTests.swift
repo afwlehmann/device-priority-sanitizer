@@ -283,6 +283,22 @@ func runUnitTests() {
         try expectEqual(candidates.map { $0.uid }, ["evolve", "jabra510"], "candidates")
     }
 
+    run("duplicate exact names are ambiguous") {
+        // Two identical headsets share a name: exact matching must not silently
+        // pick one of them.
+        let twin = AudioDevice(
+            id: 41, uid: "evolve-twin", name: "Jabra Evolve 75 SE",
+            transportClass: .bluetooth, isOutput: true, isInput: true
+        )
+        let match = resolveDevice(
+            .output, name: "Jabra Evolve 75 SE", devices: Fixtures.devices() + [twin]
+        )
+        guard case .ambiguous(let candidates) = match else {
+            throw UnitTestFailure("expected ambiguity, got \(match)")
+        }
+        try expectEqual(candidates.map { $0.uid }, ["evolve", "evolve-twin"], "both exact matches")
+    }
+
     run("no candidate is notFound") {
         let match = resolveDevice(.output, name: "Nonexistent", devices: Fixtures.devices())
         guard case .notFound = match else {

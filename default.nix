@@ -31,14 +31,12 @@ pkgs.stdenv.mkDerivation {
 
     # CLI on PATH (same binary as the app bundle; renamed on install).
     install -Dm 0755 build/audio-priority-sanitizer $out/bin/audio-priority-sanitizer
-    /usr/bin/codesign --force --sign - $out/bin/audio-priority-sanitizer
 
     # Minimal accessory .app bundle (LSUIElement — menubar only, no Dock).
     bundle=$out/Applications/audio-priority-sanitizer.app
     install -Dm 0755 build/audio-priority-sanitizer $bundle/Contents/MacOS/audio-priority-sanitizer
     install -Dm 0644 Info.plist $bundle/Contents/Info.plist
     printf 'APPL????' > $bundle/Contents/PkgInfo
-    /usr/bin/codesign --force --sign - $bundle
 
     # Raycast script commands delegating to the CLI.
     for script in raycast/*; do

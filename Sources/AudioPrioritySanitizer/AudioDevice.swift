@@ -99,7 +99,7 @@ private func getString(
     let status = withUnsafeMutablePointer(to: &value) { pointer in
         AudioObjectGetPropertyData(id, &addr, 0, nil, &size, pointer)
     }
-    guard status == noErr, let cf = value?.takeRetainedValue() else { return nil }
+    guard status == noErr, let cf = value?.takeUnretainedValue() else { return nil }
     return cf as String
 }
 

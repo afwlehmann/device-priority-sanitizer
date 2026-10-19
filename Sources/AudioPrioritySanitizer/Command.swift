@@ -82,6 +82,14 @@ func requireRealDeviceContext(_ options: Options) throws {
     }
 }
 
+/// Rejects trailing positional arguments the command does not consume instead
+/// of silently ignoring them.
+func requirePositionalArguments(_ options: Options, atMost: Int, usage: String) throws {
+    guard options.positional.count <= atMost else {
+        throw CliFailure.usage("usage: \(programName) \(usage)")
+    }
+}
+
 // MARK: - Device resolution (pure)
 
 enum DeviceNameMatch: Sendable {
@@ -98,8 +106,11 @@ func resolveDevice(
     devices: [AudioDevice]
 ) -> DeviceNameMatch {
     let candidates = devices.filter { $0.isDirection(direction) }
-    if let exact = candidates.first(where: { $0.name == name }) {
-        return .matched(exact)
+    let exact = candidates.filter { $0.name == name }
+    switch exact.count {
+    case 1: return .matched(exact[0])
+    case 0: break
+    default: return .ambiguous(exact)
     }
     let fuzzy = candidates.filter { $0.name.range(of: name, options: .caseInsensitive) != nil }
     switch fuzzy.count {
@@ -190,6 +201,7 @@ func runList(
     source: DeviceSource,
     engine: PriorityEngine
 ) throws -> CommandOutput {
+    try requirePositionalArguments(options, atMost: 2, usage: "list [output|input]")
     let devices = source.allDevices()
     let directions = try selectedDirections(options)
 
@@ -242,6 +254,7 @@ func runCurrent(
     _ options: Options,
     source: DeviceSource
 ) throws -> CommandOutput {
+    try requirePositionalArguments(options, atMost: 2, usage: "current [output|input]")
     let directions = try selectedDirections(options)
     let lines: [String] = try directions.map { direction -> String in
         let device = source.defaultDevice(for: direction)
@@ -294,6 +307,7 @@ func runReapply(
     source: DeviceSource,
     engine: PriorityEngine
 ) throws -> CommandOutput {
+    try requirePositionalArguments(options, atMost: 1, usage: "reapply")
     try requireRealDeviceContext(options)
     let devices = source.allDevices()
     let plan = planApply(source: source, engine: engine, devices: devices, force: true)
@@ -307,6 +321,7 @@ func runCycle(
     source: DeviceSource,
     engine: PriorityEngine
 ) throws -> CommandOutput {
+    try requirePositionalArguments(options, atMost: 2, usage: "cycle <output|input>")
     try requireRealDeviceContext(options)
     let direction = try tailDirection(options, usage: "cycle <output|input>")
     let devices = source.allDevices()
@@ -378,10 +393,13 @@ func runCommand(
     case "set": return try runSet(options, source: source)
     case "reapply": return try runReapply(options, source: source, engine: engine)
     case "cycle": return try runCycle(options, source: source, engine: engine)
-    case "menu-text": return CommandOutput(lines: renderMenu(source: source, engine: engine))
+    case "menu-text":
+        try requirePositionalArguments(options, atMost: 1, usage: "menu-text")
+        return CommandOutput(lines: renderMenu(source: source, engine: engine))
     case "auto":
         // Hidden test seam: models the GUI's automatic path (list change →
         // per-direction apply, respecting the excluded-current guard).
+        try requirePositionalArguments(options, atMost: 1, usage: "auto")
         try requireRealDeviceContext(options)
         let devices = source.allDevices()
         let plan = planApply(source: source, engine: engine, devices: devices, force: false)

@@ -210,6 +210,18 @@ assert_output_is_not_empty_by_jq() {
   assert_status 64
 }
 
+@test "trailing positional arguments exit EX_USAGE" {
+  run $BIN "${FLAGS[@]}" list output extra
+  assert_failure
+  assert_status 64
+  run $BIN "${FLAGS[@]}" reapply extra
+  assert_failure
+  assert_status 64
+  run $BIN "${FLAGS[@]}" menu-text extra
+  assert_failure
+  assert_status 64
+}
+
 @test "unknown command exits EX_USAGE" {
   run $BIN "${FLAGS[@]}" frobnicate
   assert_failure

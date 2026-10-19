@@ -17,41 +17,61 @@ final class PriorityEngine: Sendable {
         var description: String { "invalid regex '\(pattern)': \(reason)" }
     }
 
+    /// A tier pattern compiled once at construction. `NSRegularExpression` is
+    /// immutable and documented as safe for concurrent matching, hence the
+    /// unchecked conformance.
+    private struct CompiledEntry: @unchecked Sendable {
+        let regex: NSRegularExpression
+        let symbol: String
+    }
+
+    private let outputEntries: [CompiledEntry]
+    private let inputEntries: [CompiledEntry]
+
     /// Fails fast on invalid regexes — a tier that silently never matches
     /// would be a config trap (e.g. a forgotten escape).
     init(config: AppConfig) throws {
-        for entry in config.outputs + config.inputs {
-            do {
-                _ = try NSRegularExpression(pattern: entry.match, options: [])
-            } catch {
-                throw InvalidRegexError(
-                    pattern: entry.match,
-                    reason: (error as NSError)
-                        .userInfo[NSLocalizedDescriptionKey] as? String ?? "unparseable"
-                )
-            }
-        }
+        outputEntries = try config.outputs.map { try Self.compile($0) }
+        inputEntries = try config.inputs.map { try Self.compile($0) }
         self.config = config
+    }
+
+    private static func compile(_ entry: PriorityEntry) throws -> CompiledEntry {
+        do {
+            return CompiledEntry(
+                regex: try NSRegularExpression(pattern: entry.match, options: []),
+                symbol: entry.symbol
+            )
+        } catch {
+            throw InvalidRegexError(
+                pattern: entry.match,
+                reason: (error as NSError)
+                    .userInfo[NSLocalizedDescriptionKey] as? String ?? "unparseable"
+            )
+        }
     }
 
     // MARK: - Matching
 
-    private func matches(_ pattern: String, _ name: String) -> Bool {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return false }
+    private func entries(for direction: Direction) -> [CompiledEntry] {
+        direction == .output ? outputEntries : inputEntries
+    }
+
+    private func matches(_ entry: CompiledEntry, _ name: String) -> Bool {
         let range = NSRange(name.startIndex..., in: name)
-        return regex.firstMatch(in: name, options: [], range: range) != nil
+        return entry.regex.firstMatch(in: name, options: [], range: range) != nil
     }
 
     /// Devices of `direction` the app manages (synthetic transports excluded),
     /// ordered: tier order first (list order), remaining devices alphabetically.
     func orderedManagedDevices(_ direction: Direction, devices: [AudioDevice]) -> [AudioDevice] {
-        let entries = config.entries(for: direction)
+        let entries = entries(for: direction)
         let visible =
             devices
             .filter { $0.isDirection(direction) && $0.isManaged }
 
         func tier(_ device: AudioDevice) -> Int {
-            entries.firstIndex(where: { matches($0.match, device.name) }) ?? entries.count
+            entries.firstIndex(where: { matches($0, device.name) }) ?? entries.count
         }
 
         return visible.sorted { a, b in
@@ -72,8 +92,8 @@ final class PriorityEngine: Sendable {
         devices: [AudioDevice]
     ) -> AudioDevice? {
         let ordered = orderedManagedDevices(direction, devices: devices)
-        for entry in config.entries(for: direction) {
-            let candidates = ordered.filter { self.matches(entry.match, $0.name) }
+        for entry in entries(for: direction) {
+            let candidates = ordered.filter { self.matches(entry, $0.name) }
             if candidates.isEmpty { continue }
             if let current = current, candidates.contains(where: { $0.uid == current.uid }) {
                 return current
@@ -105,8 +125,8 @@ final class PriorityEngine: Sendable {
 
     /// SF Symbol for a menu item representing `device`.
     func entrySymbol(for device: AudioDevice, direction: Direction) -> String {
-        config.entries(for: direction)
-            .first(where: { matches($0.match, device.name) })?
+        entries(for: direction)
+            .first(where: { matches($0, device.name) })?
             .symbol
             ?? config.fallback(for: direction)
     }

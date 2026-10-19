@@ -90,22 +90,28 @@ audio-priority-sanitizer menu-text        # test seam
 audio-priority-sanitizer auto             # hidden test seam
 ```
 
-- `set`: exact name first, then case-insensitive substring; ambiguous → exit
-  3 with candidate list; no match → EX_NOINPUT.
+- `set`: exact name first, then case-insensitive substring; multiple exact
+  matches (two identical devices) and multiple substring matches are ambiguous
+  → exit 3 with candidate list; no match → EX_NOINPUT.
 - `list` includes excluded (synthetic) devices, tagged `[virtual]` etc.;
   `--json` adds `excluded`/`transport`/`current` fields.
+- Trailing positional arguments a command does not consume are rejected with
+  EX_USAGE (except `set`, where they are part of the name).
 - The menubar app is the same binary without a command (accessory app,
   `LSUIElement`).
 
 ## Packaging
 
 - `default.nix` — plain `swiftc -O` build (NOT SwiftPM, see above), minimal
-  `.app` bundle (`Info.plist`, `LSUIElement`), ad-hoc `codesign`, Raycast
-  wrappers with `@bash@`/`@cli@` placeholders.
+  `.app` bundle (`Info.plist`, `LSUIElement`), Raycast wrappers with
+  `@bash@`/`@cli@` placeholders. Signing relies on the nixpkgs darwin
+  toolchain's ad-hoc signature — no `/usr/bin/codesign` call (repo purity
+  rule); the bundle itself needs no signature because the launchd wrapper
+  execs the binary directly.
 - Consumed by `audio-priority-sanitizer.nix` (root HM module): options
   `outputs`/`inputs` (`{ match, symbol }` tiers), `fallbackSymbol`,
   `debounceMs`; writes `~/Library/Application Support/audio-priority-sanitizer/config.json`
   (store path passed as argv so a rebuild restarts the agent with new
   config), installs the CLI + Raycast commands, and runs the launchd agent
-  (`RunAtLoad` + `KeepAlive`, log truncated on launch,
+  (`RunAtLoad` + `KeepAlive`, previous log rotated to `agent.log.1` on launch,
   `~/Library/Logs/audio-priority-sanitizer/agent.log`).
