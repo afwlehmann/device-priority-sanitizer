@@ -267,6 +267,20 @@ func runUnitTests() {
         try check(!config.managesSoundEffects, "explicit false disables the mirror")
     }
 
+    run("tier titles decode; legacy entries without one still work") {
+        let config = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(
+                #"""
+                {"outputs": [
+                  {"title": "Headset", "match": "Evolve", "symbol": "headphones"},
+                  {"match": "Built-in", "symbol": "laptopcomputer"}
+                ], "inputs": []}
+                """#.utf8)
+        )
+        try expectEqual(config.outputs.map(\.title), ["Headset", nil], "tier titles")
+    }
+
     // MARK: Device resolution (CLI set semantics)
 
     run("exact match wins over substring") {
@@ -321,6 +335,66 @@ func runUnitTests() {
         guard case .notFound = match else {
             throw UnitTestFailure("expected notFound for the wrong direction, got \(match)")
         }
+    }
+
+    // MARK: Tier selection (set --tier)
+
+    run("tier selection ignores higher-priority tiers") {
+        // The headset is connected and would win auto-selection, but an
+        // explicit speaker-tier pick must resolve within that tier only.
+        let engine = try Fixtures.engine()
+        guard
+            case .device(let target) = engine.tierTarget(
+                .output, title: "Speaker", current: nil, devices: Fixtures.devices())
+        else {
+            throw UnitTestFailure("expected the speaker tier to resolve")
+        }
+        try expectEqual(target.uid, "jabra510", "speaker tier target")
+    }
+
+    run("tier selection keeps a current device that belongs to the tier") {
+        let engine = try Fixtures.engine()
+        let devices = Fixtures.devices()
+        let current = devices.first { $0.uid == "jabra510" }!
+        guard
+            case .device(let target) = engine.tierTarget(
+                .output, title: "Speaker", current: current, devices: devices)
+        else {
+            throw UnitTestFailure("expected the speaker tier to resolve")
+        }
+        try expectEqual(target.uid, "jabra510", "current speaker kept")
+    }
+
+    run("tier selection is per direction") {
+        let engine = try Fixtures.engine()
+        guard
+            case .device(let target) = engine.tierTarget(
+                .input, title: "Built-in", current: nil, devices: Fixtures.devices())
+        else {
+            throw UnitTestFailure("expected the built-in input tier to resolve")
+        }
+        try expectEqual(target.uid, "mic", "built-in input")
+    }
+
+    run("unknown tier is reported, not resolved") {
+        let engine = try Fixtures.engine()
+        let selection = engine.tierTarget(
+            .output, title: "Nope", current: nil, devices: Fixtures.devices())
+        try expectEqual(selection, .unknownTier, "unknown tier")
+    }
+
+    run("tier with no connected device is reported as empty") {
+        let engine = try Fixtures.engine()
+        let withoutHeadset = Fixtures.devices().filter { $0.uid != "evolve" }
+        let selection = engine.tierTarget(
+            .output, title: "Headset", current: nil, devices: withoutHeadset)
+        try expectEqual(selection, .noDevice, "empty tier")
+    }
+
+    run("tier titles are listed in priority order") {
+        let engine = try Fixtures.engine()
+        try expectEqual(
+            engine.tierTitles(.output), ["Headset", "Speaker", "Built-in"], "output titles")
     }
 
     // MARK: Planning (excluded-current guard, force bypass)

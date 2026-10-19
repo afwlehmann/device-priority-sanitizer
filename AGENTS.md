@@ -91,6 +91,7 @@ built with the nixpkgs Swift toolchain via plain `swiftc`.
 audio-priority-sanitizer list [output|input] [--json]
 audio-priority-sanitizer current [output|input]
 audio-priority-sanitizer set <output|input> <name>
+audio-priority-sanitizer set <output|input> --tier <title>
 audio-priority-sanitizer reapply
 audio-priority-sanitizer cycle <output|input>
 audio-priority-sanitizer menu-text        # test seam
@@ -100,6 +101,13 @@ audio-priority-sanitizer auto             # hidden test seam
 - `set`: exact name first, then case-insensitive substring; multiple exact
   matches (two identical devices) and multiple substring matches are ambiguous
   → exit 3 with candidate list; no match → EX_NOINPUT.
+- `set --tier`: resolves the configured tier `title` to the best currently
+  connected device in it — current device kept when it belongs to the tier,
+  otherwise the alphabetically first match (same rules as auto-selection).
+  Unknown title → EX_USAGE (lists the titles); tier with no connected device
+  → EX_NOINPUT; a device name alongside `--tier` → EX_USAGE. This is a
+  one-shot manual pick: it persists until that direction's device set changes,
+  then auto-selection resumes at the highest tier.
 - `cycle`: the manual override for when the wanted device is *not* the
   highest priority. Advances to the next managed device in visible menu order
   (wrapping, synthetic devices skipped), so it can be bound to a hotkey
@@ -118,14 +126,18 @@ audio-priority-sanitizer auto             # hidden test seam
 
 - `default.nix` — plain `swiftc -O` build (NOT SwiftPM, see above), minimal
   `.app` bundle (`Info.plist`, `LSUIElement`), Raycast wrappers with
-  `@bash@`/`@cli@` placeholders. Signing relies on the nixpkgs darwin
-  toolchain's ad-hoc signature — no `/usr/bin/codesign` call (repo purity
-  rule); the bundle itself needs no signature because the launchd wrapper
-  execs the binary directly.
+  `@bash@`/`@cli@` placeholders (`reapply`, `cycle-output`, `cycle-input`).
+  Signing relies on the nixpkgs darwin toolchain's ad-hoc signature — no
+  `/usr/bin/codesign` call (repo purity rule); the bundle itself needs no
+  signature because the launchd wrapper execs the binary directly.
 - Consumed by `audio-priority-sanitizer.nix` (root HM module): options
-  `outputs`/`inputs` (`{ match, symbol }` tiers), `fallbackSymbol`,
+  `outputs`/`inputs` (`{ title, match, symbol }` tiers), `fallbackSymbol`,
   `debounceMs`; writes `~/Library/Application Support/audio-priority-sanitizer/config.json`
   (store path passed as argv so a rebuild restarts the agent with new
   config), installs the CLI + Raycast commands, and runs the launchd agent
   (`RunAtLoad` + `KeepAlive`, previous log rotated to `agent.log.1` on launch,
   `~/Library/Logs/audio-priority-sanitizer/agent.log`).
+- The Raycast `set-output`/`set-input` commands are **generated in the root HM
+  module**, not shipped by the package: their static tier dropdown must embed
+  `cfg.outputs`/`cfg.inputs` titles (`title` is required and must be unique per
+  direction; the module asserts this). They call `set <direction> --tier "$1"`.

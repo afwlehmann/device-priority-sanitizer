@@ -23,6 +23,7 @@ final class PriorityEngine: Sendable {
     private struct CompiledEntry: @unchecked Sendable {
         let regex: NSRegularExpression
         let symbol: String
+        let title: String?
     }
 
     private let outputEntries: [CompiledEntry]
@@ -40,7 +41,8 @@ final class PriorityEngine: Sendable {
         do {
             return CompiledEntry(
                 regex: try NSRegularExpression(pattern: entry.match, options: []),
-                symbol: entry.symbol
+                symbol: entry.symbol,
+                title: entry.title
             )
         } catch {
             throw InvalidRegexError(
@@ -101,6 +103,40 @@ final class PriorityEngine: Sendable {
             return candidates.first
         }
         return nil
+    }
+
+    // MARK: - Tier selection
+
+    enum TierSelection: Equatable, Sendable {
+        case unknownTier
+        case noDevice
+        case device(AudioDevice)
+    }
+
+    /// Tier names available for `set --tier`, in priority order.
+    func tierTitles(_ direction: Direction) -> [String] {
+        entries(for: direction).compactMap(\.title)
+    }
+
+    /// Best connected device in the tier named `title`, using the same rules
+    /// as auto-selection: the current device is kept when it already belongs
+    /// to the tier, otherwise the alphabetically first match wins.
+    func tierTarget(
+        _ direction: Direction,
+        title: String,
+        current: AudioDevice?,
+        devices: [AudioDevice]
+    ) -> TierSelection {
+        guard let entry = entries(for: direction).first(where: { $0.title == title }) else {
+            return .unknownTier
+        }
+        let candidates = orderedManagedDevices(direction, devices: devices)
+            .filter { matches(entry, $0.name) }
+        guard let first = candidates.first else { return .noDevice }
+        if let current = current, candidates.contains(where: { $0.uid == current.uid }) {
+            return .device(current)
+        }
+        return .device(first)
     }
 
     /// Next device after `current` in the visible menu order, wrapping.

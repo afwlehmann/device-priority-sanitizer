@@ -14,6 +14,15 @@ let
 
   entrySubmodule = lib.types.submodule {
     options = {
+      title = lib.mkOption {
+        type = lib.types.str;
+        description = ''
+          Human-readable name of the tier, used by `set --tier` and as the
+          value in the generated Raycast dropdown. Must be unique per
+          direction.
+        '';
+      };
+
       match = lib.mkOption {
         type = lib.types.str;
         description = ''
@@ -76,12 +85,62 @@ let
       --config "${configJson}" >>"${logDir}/agent.log" 2>&1
   '';
 
+  # Raycast script command with a static tier dropdown. The tiers are known at
+  # build time (unlike the connected devices), so the argument data can be
+  # generated here; the CLI resolves the chosen tier to a concrete device at
+  # invocation time.
+  tierSetScript =
+    direction:
+    let
+      isOutput = direction == "output";
+      entries = if isOutput then cfg.outputs else cfg.inputs;
+      label = if isOutput then "Output" else "Input";
+      icon = if isOutput then "🔊" else "🎙️";
+      argument = builtins.toJSON {
+        type = "dropdown";
+        placeholder = "Select ${direction} tier";
+        data = map (entry: {
+          title = entry.title;
+          value = entry.title;
+        }) entries;
+      };
+    in
+    pkgs.writeShellScript "audio-priority-sanitizer-set-${direction}" ''
+      # @raycast.schemaVersion 1
+      # @raycast.title Audio Priority: Set ${label}
+      # @raycast.mode silent
+      # @raycast.icon ${icon}
+      # @raycast.description Set the default ${direction} device to the best connected device in a configured tier.
+      # @raycast.author Alexander Lehmann
+      # @raycast.packageName Audio Priority Sanitizer
+      # @raycast.argument1 ${argument}
+
+      set -euo pipefail
+
+      exec ${pkg}/bin/audio-priority-sanitizer set ${direction} --tier "$1"
+    '';
+
   raycastCommands = [
-    "audio-priority-sanitizer-reapply"
-    "audio-priority-sanitizer-cycle-output"
-    "audio-priority-sanitizer-cycle-input"
-    "audio-priority-sanitizer-set-output"
-    "audio-priority-sanitizer-set-input"
+    {
+      name = "audio-priority-sanitizer-reapply";
+      source = "${pkg}/bin/audio-priority-sanitizer-reapply";
+    }
+    {
+      name = "audio-priority-sanitizer-cycle-output";
+      source = "${pkg}/bin/audio-priority-sanitizer-cycle-output";
+    }
+    {
+      name = "audio-priority-sanitizer-cycle-input";
+      source = "${pkg}/bin/audio-priority-sanitizer-cycle-input";
+    }
+    {
+      name = "audio-priority-sanitizer-set-output";
+      source = tierSetScript "output";
+    }
+    {
+      name = "audio-priority-sanitizer-set-input";
+      source = tierSetScript "input";
+    }
   ];
 in
 {
@@ -92,14 +151,17 @@ in
       type = lib.types.listOf entrySubmodule;
       default = [
         {
+          title = "Headset";
           match = "Evolve|WH-1000|Rienok|EarPods";
           symbol = "headphones";
         }
         {
+          title = "Speaker";
           match = "SPEAK 510";
           symbol = "hifispeaker.fill";
         }
         {
+          title = "Built-in";
           match = "MacBook Pro Speakers|Built-in";
           symbol = "laptopcomputer";
         }
@@ -114,14 +176,17 @@ in
       type = lib.types.listOf entrySubmodule;
       default = [
         {
+          title = "Headset";
           match = "Evolve|WH-1000|Rienok|EarPods";
           symbol = "headphones";
         }
         {
+          title = "Speaker";
           match = "SPEAK 510";
           symbol = "hifispeaker.fill";
         }
         {
+          title = "Built-in";
           match = "MacBook Pro Microphone|Built-in";
           symbol = "laptopcomputer";
         }
@@ -168,17 +233,34 @@ in
   };
 
   config = lib.mkIf (cfg.enable && isDarwin) {
+    assertions = [
+      {
+        assertion =
+          cfg.outputs != [ ]
+          && lib.all (entry: entry.title != "") cfg.outputs
+          && lib.length (lib.unique (map (entry: entry.title) cfg.outputs)) == lib.length cfg.outputs;
+        message = "services.audio-priority-sanitizer.outputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+      }
+      {
+        assertion =
+          cfg.inputs != [ ]
+          && lib.all (entry: entry.title != "") cfg.inputs
+          && lib.length (lib.unique (map (entry: entry.title) cfg.inputs)) == lib.length cfg.inputs;
+        message = "services.audio-priority-sanitizer.inputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+      }
+    ];
+
     home.packages = [ pkg ];
 
     home.file = {
       "Library/Application Support/audio-priority-sanitizer/config.json".source = configJson;
     }
     // (builtins.listToAttrs (
-      map (name: {
-        name = "Applications/${name}";
+      map (command: {
+        name = "Applications/${command.name}";
         value = {
           executable = true;
-          source = "${pkg}/bin/${name}";
+          source = command.source;
         };
       }) raycastCommands
     ));

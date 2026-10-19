@@ -53,6 +53,7 @@ func parseArguments(_ arguments: [String]) throws -> Options {
     var devicesPath: String?
     var dryRun = false
     var json = false
+    var tier: String?
     var helpRequested = false
     var positional: [String] = []
 
@@ -69,6 +70,11 @@ func parseArguments(_ arguments: [String]) throws -> Options {
                 throw CliFailure.usage("--devices requires a path")
             }
             devicesPath = value
+        case "--tier":
+            guard let value = iterator.next() else {
+                throw CliFailure.usage("--tier requires a title")
+            }
+            tier = value
         case "--dry-run":
             dryRun = true
         case "--json":
@@ -85,6 +91,7 @@ func parseArguments(_ arguments: [String]) throws -> Options {
         devicesPath: devicesPath,
         dryRun: dryRun,
         json: json,
+        tier: tier,
         positional: positional
     )
 }
@@ -98,6 +105,8 @@ func printUsage() {
           list [output|input]         List devices (current marked with *; includes excluded)
           current [output|input]      Print current device name(s)
           set <output|input> <name>   Set the default device by name
+          set <output|input> --tier <title>
+                                      Set the best connected device in a configured tier
           reapply                     Force-apply the configured priority (both directions)
           cycle <output|input>        Advance to the next visible device (wrapping)
           menu-text                   Print the dropdown as deterministic text (test seam)
@@ -105,6 +114,7 @@ func printUsage() {
         Flags:
           --config <path>    Config JSON (default: ~/Library/Application Support/audio-priority-sanitizer/config.json)
           --devices <path>   Device table JSON fixture (headless test seam; writes require --dry-run)
+          --tier <title>     Tier for `set` (titles come from the configured tiers)
           --dry-run          Report intended changes without applying them
           --json             Machine-readable output for `list`
           --help             Show this help

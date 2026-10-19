@@ -139,6 +139,45 @@ assert_output_is_not_empty_by_jq() {
   assert_output_is "output: would set to Microsoft Teams Audio"
 }
 
+@test "set --tier picks the best connected device in that tier" {
+  # Auto-selection would pick the headset (tier 0); an explicit Speaker pick
+  # must resolve within that tier, not fall back to the headset.
+  run $BIN "${FLAGS[@]}" --dry-run set output --tier "Speaker"
+  assert_success
+  assert_output_is "output: would set to Jabra SPEAK 510 USB"
+}
+
+@test "set --tier to the current device is a no-op" {
+  run $BIN "${FLAGS[@]}" --dry-run set output --tier "Headset"
+  assert_success
+  assert_output_is "output: already Jabra Evolve 75 SE"
+}
+
+@test "set --tier is per direction" {
+  run $BIN "${FLAGS[@]}" --dry-run set input --tier "Built-in"
+  assert_success
+  assert_output_is "input: would set to MacBook Pro Microphone"
+}
+
+@test "set --tier with an unknown title fails with EX_USAGE" {
+  run $BIN "${FLAGS[@]}" --dry-run set output --tier "Nope"
+  assert_failure
+  assert_status 64
+  assert_line_matches "unknown output tier 'Nope'; available: Headset, Speaker, Built-in"
+}
+
+@test "set --tier with no connected device fails with EX_NOINPUT" {
+  run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-no-headset.json" --dry-run set output --tier "Headset"
+  assert_failure
+  assert_status 66
+}
+
+@test "set --tier rejects a device name" {
+  run $BIN "${FLAGS[@]}" --dry-run set output --tier "Headset" "Evolve"
+  assert_failure
+  assert_status 64
+}
+
 @test "cycle advances in visible menu order" {
   # Tier 0 (headsets) is alphabetical: EarPods, Jabra Evolve 75 SE, WH-1000XM2
   # — cycling from Evolve advances to the next tier-0 member, not to the next

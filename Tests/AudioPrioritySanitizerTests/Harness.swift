@@ -115,14 +115,18 @@ enum Fixtures {
         try PriorityEngine(
             config: AppConfig(
                 outputs: [
-                    PriorityEntry(match: "Evolve|WH-1000|Rienok|EarPods", symbol: "headphones"),
-                    PriorityEntry(match: "SPEAK 510", symbol: "hifispeaker.fill"),
-                    PriorityEntry(match: "MacBook Pro Speakers|Built-in", symbol: "laptopcomputer"),
+                    PriorityEntry(
+                        match: "Evolve|WH-1000|Rienok|EarPods", symbol: "headphones", title: "Headset"),
+                    PriorityEntry(match: "SPEAK 510", symbol: "hifispeaker.fill", title: "Speaker"),
+                    PriorityEntry(
+                        match: "MacBook Pro Speakers|Built-in", symbol: "laptopcomputer", title: "Built-in"),
                 ],
                 inputs: [
-                    PriorityEntry(match: "Evolve|WH-1000|Rienok|EarPods", symbol: "headphones"),
-                    PriorityEntry(match: "SPEAK 510", symbol: "hifispeaker.fill"),
-                    PriorityEntry(match: "MacBook Pro Microphone|Built-in", symbol: "laptopcomputer"),
+                    PriorityEntry(
+                        match: "Evolve|WH-1000|Rienok|EarPods", symbol: "headphones", title: "Headset"),
+                    PriorityEntry(match: "SPEAK 510", symbol: "hifispeaker.fill", title: "Speaker"),
+                    PriorityEntry(
+                        match: "MacBook Pro Microphone|Built-in", symbol: "laptopcomputer", title: "Built-in"),
                 ],
                 fallbackSymbol: FallbackSymbols(output: "speaker.wave.3", input: "mic"),
                 debounceMs: 500

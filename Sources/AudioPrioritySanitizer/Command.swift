@@ -52,6 +52,7 @@ struct Options: Sendable {
     let devicesPath: String?
     let dryRun: Bool
     let json: Bool
+    let tier: String?
     let positional: [String]
 }
 
@@ -269,36 +270,75 @@ func runCurrent(
     return CommandOutput(lines: lines)
 }
 
+/// Shared effect for `set <name>` and `set --tier`: one manual pick, with the
+/// usual already-set / dry-run reporting.
+private func applyDefaultDevice(
+    _ device: AudioDevice,
+    direction: Direction,
+    source: DeviceSource,
+    dryRun: Bool
+) throws -> CommandOutput {
+    if source.defaultDevice(for: direction)?.uid == device.uid {
+        return CommandOutput(lines: ["\(direction.rawValue): already \(device.name)"])
+    }
+    if dryRun {
+        return CommandOutput(lines: ["\(direction.rawValue): would set to \(device.name)"])
+    }
+    let status = source.setDefault(device, direction: direction)
+    guard status == noErr else {
+        throw CliFailure.software(
+            "failed to set \(direction.rawValue) to \(device.name): OSStatus \(status)"
+        )
+    }
+    return CommandOutput(lines: ["\(direction.rawValue): set to \(device.name)"])
+}
+
 func runSet(
     _ options: Options,
-    source: DeviceSource
+    source: DeviceSource,
+    engine: PriorityEngine
 ) throws -> CommandOutput {
     try requireRealDeviceContext(options)
+    if let tier = options.tier {
+        guard options.positional.count == 2 else {
+            throw CliFailure.usage("usage: \(programName) set <output|input> --tier <title>")
+        }
+        let direction = try tailDirection(options, usage: "set <output|input> --tier <title>")
+        switch engine.tierTarget(
+            direction,
+            title: tier,
+            current: source.defaultDevice(for: direction),
+            devices: source.allDevices()
+        ) {
+        case .unknownTier:
+            throw CliFailure.usage(
+                "unknown \(direction.rawValue) tier '\(tier)'; available: "
+                    + engine.tierTitles(direction).joined(separator: ", ")
+            )
+        case .noDevice:
+            throw CliFailure.noDevice(
+                "no connected \(direction.rawValue) device in tier '\(tier)'"
+            )
+        case .device(let device):
+            return try applyDefaultDevice(
+                device, direction: direction, source: source, dryRun: options.dryRun
+            )
+        }
+    }
     guard options.positional.count >= 3 else {
         throw CliFailure.usage("usage: \(programName) set <output|input> <device name>")
     }
     let direction = try tailDirection(options, usage: "set <output|input> <device name>")
     let name = options.positional[2...].joined(separator: " ")
-    let current = source.defaultDevice(for: direction)
     switch resolveDevice(direction, name: name, devices: source.allDevices()) {
     case .notFound:
         throw CliFailure.noDevice("no \(direction.rawValue) device matching '\(name)'")
     case .ambiguous(let candidates):
         throw CliFailure.ambiguous(direction: direction.rawValue, name: name, candidates: candidates)
     case .matched(let device):
-        if current?.uid == device.uid {
-            return CommandOutput(lines: ["\(direction.rawValue): already \(device.name)"])
-        }
-        if options.dryRun {
-            return CommandOutput(lines: ["\(direction.rawValue): would set to \(device.name)"])
-        }
-        let status = source.setDefault(device, direction: direction)
-        guard status == noErr else {
-            throw CliFailure.software(
-                "failed to set \(direction.rawValue) to \(device.name): OSStatus \(status)"
-            )
-        }
-        return CommandOutput(lines: ["\(direction.rawValue): set to \(device.name)"])
+        return try applyDefaultDevice(
+            device, direction: direction, source: source, dryRun: options.dryRun
+        )
     }
 }
 
@@ -390,7 +430,7 @@ func runCommand(
     switch command {
     case "list": return try runList(options, source: source, engine: engine)
     case "current": return try runCurrent(options, source: source)
-    case "set": return try runSet(options, source: source)
+    case "set": return try runSet(options, source: source, engine: engine)
     case "reapply": return try runReapply(options, source: source, engine: engine)
     case "cycle": return try runCycle(options, source: source, engine: engine)
     case "menu-text":

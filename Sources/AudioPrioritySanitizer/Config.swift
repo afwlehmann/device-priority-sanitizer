@@ -12,6 +12,10 @@ import Foundation
 struct PriorityEntry: Codable, Equatable, Sendable {
     let match: String
     let symbol: String
+    /// Human-readable tier name, used by `set --tier` and by the generated
+    /// Raycast dropdown. Optional for backward compatibility with configs
+    /// written before tier selection existed.
+    var title: String? = nil
 }
 
 struct FallbackSymbols: Codable, Equatable, Sendable {
