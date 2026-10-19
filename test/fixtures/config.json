@@ -1,0 +1,14 @@
+{
+  "outputs": [
+    { "match": "Evolve|WH-1000|Rienok|EarPods", "symbol": "headphones" },
+    { "match": "SPEAK 510", "symbol": "hifispeaker.fill" },
+    { "match": "MacBook Pro Speakers|Built-in", "symbol": "laptopcomputer" }
+  ],
+  "inputs": [
+    { "match": "Evolve|WH-1000|Rienok|EarPods", "symbol": "headphones" },
+    { "match": "SPEAK 510", "symbol": "hifispeaker.fill" },
+    { "match": "MacBook Pro Microphone|Built-in", "symbol": "laptopcomputer" }
+  ],
+  "fallbackSymbol": { "output": "speaker.wave.3", "input": "mic" },
+  "debounceMs": 500
+}

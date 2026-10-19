@@ -1,0 +1,15 @@
+#!@bash@
+#
+# @raycast.schemaVersion 1
+# @raycast.title Audio Priority: Reapply
+# @raycast.mode silent
+# @raycast.icon 🎚️
+# @raycast.description Force-apply the configured audio device priority (both directions).
+# @raycast.author Alexander Lehmann
+# @raycast.packageName Audio Priority Sanitizer
+
+set -euo pipefail
+shopt -s inherit_errexit
+# Note: errexit has exceptions inside if/&&/|| and pipelines — not used here.
+
+exec @cli@ reapply

@@ -1,0 +1,12 @@
+{
+  "devices": [
+    { "uid": "jabra510", "name": "Jabra SPEAK 510 USB", "transport": "usb", "isOutput": true, "isInput": true },
+    { "uid": "spk", "name": "MacBook Pro Speakers", "transport": "builtIn", "isOutput": true, "isInput": false },
+    { "uid": "mic", "name": "MacBook Pro Microphone", "transport": "builtIn", "isOutput": false, "isInput": true },
+    { "uid": "dell", "name": "DELL U3824DW", "transport": "displayPort", "isOutput": true, "isInput": false },
+    { "uid": "cam", "name": "Live Streamer CAM313 Microphone", "transport": "usb", "isOutput": false, "isInput": true },
+    { "uid": "teams", "name": "Microsoft Teams Audio", "transport": "virtual", "isOutput": true, "isInput": true }
+  ],
+  "defaultOutput": "spk",
+  "defaultInput": "mic"
+}

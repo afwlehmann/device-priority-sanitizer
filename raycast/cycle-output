@@ -1,0 +1,15 @@
+#!@bash@
+#
+# @raycast.schemaVersion 1
+# @raycast.title Audio Priority: Cycle Output
+# @raycast.mode silent
+# @raycast.icon 🔊
+# @raycast.description Advance the default output device to the next visible one (wrapping).
+# @raycast.author Alexander Lehmann
+# @raycast.packageName Audio Priority Sanitizer
+
+set -euo pipefail
+shopt -s inherit_errexit
+# Note: errexit has exceptions inside if/&&/|| and pipelines — not used here.
+
+exec @cli@ cycle output
