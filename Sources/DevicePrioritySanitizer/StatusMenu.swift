@@ -6,6 +6,7 @@ final class ActionPayload: NSObject {
         case select(Target, MediaDevice)
         case cycle(Target)
         case reapply
+        case togglePrioritization
         case settings
     }
 
@@ -19,9 +20,12 @@ final class ActionPayload: NSObject {
 /// Owns the `NSStatusItem`: the three-symbol menubar image and the dropdown.
 ///
 /// Menubar: [speaker slot][microphone slot][camera slot], each an SF Symbol
-/// for the category of the current device of that target. A synthetic
-/// (excluded) current device renders the dedicated "not managed" glyph — the
-/// app leaves it alone, but says so.
+/// for the category of the current device of that target; a synthetic
+/// (excluded) current device renders the dedicated "not managed" glyph. A
+/// globally disabled switch appends `pause.circle` — the app leaves
+/// everything alone, but says so. The dropdown leads with a checkable
+/// Prioritization item (the master toggle) and greys out Reapply while
+/// disabled; manual device picks and Cycle remain available.
 final class MenuController: NSObject {
     private let engine: PriorityEngine
     private let source: DeviceSource
@@ -30,6 +34,7 @@ final class MenuController: NSObject {
     var onSelect: ((Target, MediaDevice) -> Void)?
     var onCycle: ((Target) -> Void)?
     var onReapply: (() -> Void)?
+    var onTogglePrioritization: (() -> Void)?
 
     init(engine: PriorityEngine, source: DeviceSource) {
         self.engine = engine
@@ -38,10 +43,13 @@ final class MenuController: NSObject {
         super.init()
     }
 
-    func update(devices: [MediaDevice]) {
+    func update(devices: [MediaDevice], prioritizationEnabled: Bool) {
         let currents = Target.allCases.map { ($0, source.defaultDevice(for: $0)) }
-        let symbols = currents.map { target, current in
+        var symbols = currents.map { target, current in
             (symbol: engine.slotSymbol(for: current, target: target), description: target.menuTitle)
+        }
+        if !prioritizationEnabled {
+            symbols.append((symbol: "pause.circle", description: "Prioritization"))
         }
 
         if let image = Self.statusImage(symbols: symbols) {
@@ -51,7 +59,8 @@ final class MenuController: NSObject {
             currents
             .map { "\($0.0.menuTitle): \($0.1?.name ?? "none")" }
             .joined(separator: " · ")
-        statusItem.menu = buildMenu(devices: devices)
+            + (prioritizationEnabled ? "" : " · Prioritization disabled")
+        statusItem.menu = buildMenu(devices: devices, prioritizationEnabled: prioritizationEnabled)
     }
 
     // MARK: - Status image
@@ -88,9 +97,19 @@ final class MenuController: NSObject {
 
     // MARK: - Menu
 
-    private func buildMenu(devices: [MediaDevice]) -> NSMenu {
+    private func buildMenu(devices: [MediaDevice], prioritizationEnabled: Bool) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        let toggle = NSMenuItem(
+            title: "Prioritization",
+            action: #selector(handleMenuItem(_:)),
+            keyEquivalent: ""
+        )
+        toggle.target = self
+        toggle.state = prioritizationEnabled ? .on : .off
+        toggle.representedObject = ActionPayload(.togglePrioritization)
+        menu.addItem(toggle)
+        menu.addItem(.separator())
         Target.allCases
             .map { addTargetSubmenu($0, to: menu, devices: devices) }
             .forEach { menu.addItem($0) }
@@ -99,7 +118,11 @@ final class MenuController: NSObject {
             menu.addItem(makeSubmenu("Cycle \(target.menuTitle)", payload: .cycle(target)))
         }
         menu.addItem(.separator())
-        menu.addItem(makeSubmenu("Reapply Priority", payload: .reapply))
+        let reapply = makeSubmenu("Reapply Priority", payload: .reapply)
+        // Reapply is a prioritization action: while the master switch is
+        // off it is greyed out instead of silently no-opping.
+        reapply.isEnabled = prioritizationEnabled
+        menu.addItem(reapply)
         menu.addItem(makeSubmenu("Open Sound Settings", payload: .settings))
         return menu
     }
@@ -112,6 +135,19 @@ final class MenuController: NSObject {
         let title = target.menuTitle
         let submenu = NSMenu(title: title)
         let current = source.defaultDevice(for: target)
+
+        // A target with no priority tiers is not auto-managed: the empty
+        // tier list is the switch — say so in the submenu.
+        if !engine.isManaged(target) {
+            let item = NSMenuItem(
+                title: "Not auto-managed (no priority tiers)",
+                action: nil,
+                keyEquivalent: ""
+            )
+            item.isEnabled = false
+            submenu.addItem(item)
+            submenu.addItem(.separator())
+        }
 
         // Out-of-domain current device: the app deliberately does not touch
         // it — say so instead of silently hiding it.
@@ -178,6 +214,8 @@ final class MenuController: NSObject {
             onCycle?(target)
         case .reapply:
             onReapply?()
+        case .togglePrioritization:
+            onTogglePrioritization?()
         case .settings:
             if let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") {
                 NSWorkspace.shared.open(url)

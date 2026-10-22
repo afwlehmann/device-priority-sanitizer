@@ -112,6 +112,15 @@ final class PriorityEngine: Sendable {
         return nil
     }
 
+    // MARK: - Managed targets
+
+    /// A target with no configured tiers is not auto-managed: auto-selection
+    /// and `reapply` skip it entirely. The empty tier list *is* the switch —
+    /// there is no separate boolean.
+    func isManaged(_ target: Target) -> Bool {
+        !entries(for: target).isEmpty
+    }
+
     // MARK: - Tier selection
 
     enum TierSelection: Equatable, Sendable {

@@ -688,16 +688,88 @@ func runUnitTests() {
         try check(source.defaultDevice(for: .camera) == nil, "no camera default")
     }
 
+    // MARK: Prioritization switch (runtime state)
+
+    run("state decodes, defaults, and round-trips") {
+        let enabled = try JSONDecoder().decode(
+            PrioritizationState.self, from: Data(#"{"prioritizationEnabled": true}"#.utf8))
+        try check(enabled.prioritizationEnabled, "enabled decodes")
+        let disabled = try JSONDecoder().decode(
+            PrioritizationState.self, from: Data(#"{"prioritizationEnabled": false}"#.utf8))
+        try check(!disabled.prioritizationEnabled, "disabled decodes")
+        try expectEqual(loadState("/nonexistent-device-priority/state.json"), .missing, "missing state file")
+        if case .corrupt = decodeState(Data("not json".utf8)) {
+            // expected
+        } else {
+            throw UnitTestFailure("garbage must decode as corrupt")
+        }
+        let roundTrip = try JSONDecoder().decode(PrioritizationState.self, from: try encodeState(disabled))
+        try expectEqual(roundTrip, disabled, "state round-trips through encode/decode")
+    }
+
+    run("engine reports managed targets from the tier lists") {
+        let engine = try Fixtures.engine()
+        try check(
+            engine.isManaged(.output) && engine.isManaged(.input) && engine.isManaged(.camera),
+            "documented config manages all targets")
+        let empty = try PriorityEngine(
+            config: AppConfig(outputs: [], inputs: [], fallbackSymbol: nil, debounceMs: nil)
+        )
+        try check(
+            !empty.isManaged(.output) && !empty.isManaged(.input) && !empty.isManaged(.camera),
+            "empty tier lists leave every target unmanaged")
+    }
+
+    run("plan skips disabled and unmanaged targets without writes") {
+        let engine = try Fixtures.engine()
+        let source = Fixtures.overlay(output: "jabra510", input: "mic", camera: "facetime")
+
+        let disabledPlan = planApply(
+            source: source, engine: engine, devices: Fixtures.devices(), force: true,
+            prioritizationEnabled: false
+        )
+        try check(disabledPlan.allSatisfy(\.skippedDisabled), "every change skipped as disabled")
+        try check(disabledPlan.allSatisfy { $0.device == nil }, "no targets may be computed")
+        try expectEqual(source.usageCount, 0, "no writes may happen")
+        let disabledText = renderPlan(disabledPlan, dryRun: true).joined(separator: "\n")
+        try check(
+            disabledText.contains("output: skipped — prioritization disabled"),
+            "disabled rendering: \(disabledText)")
+
+        // An empty tier list is the per-target switch: those targets are
+        // unmanaged even while prioritization is globally enabled.
+        let sparseEngine = try PriorityEngine(
+            config: AppConfig(
+                outputs: [PriorityEntry(match: "Evolve", symbol: "headphones", title: "Headset")],
+                inputs: [], cameras: [], fallbackSymbol: nil, debounceMs: nil
+            )
+        )
+        let plan = planApply(
+            source: source, engine: sparseEngine, devices: Fixtures.devices(), force: true,
+            prioritizationEnabled: true
+        )
+        let byTarget = Dictionary(uniqueKeysWithValues: plan.map { ($0.target, $0) })
+        try check(byTarget[.output]!.device != nil, "managed output still computes a target")
+        try check(byTarget[.input]!.skippedUnmanaged, "empty input tier list is unmanaged")
+        try check(byTarget[.camera]!.skippedUnmanaged, "empty camera tier list is unmanaged")
+        let text = renderPlan(plan, dryRun: true).joined(separator: "\n")
+        try check(
+            text.contains("input: not auto-managed (no priority tiers)"),
+            "unmanaged rendering: \(text)")
+    }
+
     // MARK: Menu rendering (deterministic)
 
     run("menu text lists tier order with checkmark and excluded info row") {
         let engine = try Fixtures.engine()
         let source = Fixtures.overlay(output: "jabra510", input: "teams")
-        let text = renderMenu(source: source, engine: engine).joined(separator: "\n")
+        let text = renderMenu(source: source, engine: engine, prioritizationEnabled: true)
+            .joined(separator: "\n")
         try check(
             text.contains("status: hifispeaker.fill questionmark.circle video"),
             "status line: \(text)"
         )
+        try check(text.contains("prioritization: enabled"), "prioritization line")
         try check(text.contains("  ✓ Jabra SPEAK 510 USB [hifispeaker.fill]"), "current speaker row")
         try check(text.contains("  · Jabra Evolve 75 SE [headphones]"), "other tier row")
         try check(
@@ -709,7 +781,8 @@ func runUnitTests() {
     run("menu text covers the camera target with its own block") {
         let engine = try Fixtures.engine()
         let source = Fixtures.overlay(output: "jabra510", input: "teams", camera: "obsvirtual")
-        let text = renderMenu(source: source, engine: engine).joined(separator: "\n")
+        let text = renderMenu(source: source, engine: engine, prioritizationEnabled: true)
+            .joined(separator: "\n")
         try check(
             text.contains("status: hifispeaker.fill questionmark.circle questionmark.circle"),
             "three-slot status line: \(text)"
@@ -719,6 +792,28 @@ func runUnitTests() {
         try check(
             text.contains("  - Current: OBS Virtual Camera (not managed)"),
             "excluded camera info row"
+        )
+    }
+
+    run("menu text marks a disabled switch and unmanaged targets") {
+        let engine = try Fixtures.engine()
+        let source = Fixtures.overlay(output: "jabra510", input: "teams", camera: "obsvirtual")
+        let disabled = renderMenu(source: source, engine: engine, prioritizationEnabled: false)
+            .joined(separator: "\n")
+        try check(disabled.contains("prioritization: disabled"), "disabled line")
+        try check(
+            disabled.contains("status: hifispeaker.fill questionmark.circle questionmark.circle pause.circle"),
+            "pause marker appended: \(disabled)"
+        )
+
+        let sparseEngine = try PriorityEngine(
+            config: AppConfig(outputs: [], inputs: [], cameras: [], fallbackSymbol: nil, debounceMs: nil)
+        )
+        let sparse = renderMenu(source: source, engine: sparseEngine, prioritizationEnabled: true)
+            .joined(separator: "\n")
+        try check(
+            sparse.contains("  - Not auto-managed (no priority tiers)"),
+            "unmanaged info row: \(sparse)"
         )
     }
 }

@@ -143,34 +143,29 @@ let
       exec ${pkg}/bin/device-priority-sanitizer set ${target} --tier "$1"
     '';
 
+  allTargets = [
+    "output"
+    "input"
+    "camera"
+  ];
+
   raycastCommands = [
     {
       name = "device-priority-sanitizer-reapply";
       source = "${pkg}/bin/device-priority-sanitizer-reapply";
     }
   ]
-  ++ (map
-    (target: {
-      name = "device-priority-sanitizer-cycle-${target}";
-      source = "${pkg}/bin/device-priority-sanitizer-cycle-${target}";
-    })
-    ([
-      "output"
-      "input"
-      "camera"
-    ])
-  )
-  ++ (map
-    (target: {
-      name = "device-priority-sanitizer-set-${target}";
-      source = tierSetScript target;
-    })
-    ([
-      "output"
-      "input"
-      "camera"
-    ])
-  );
+  ++ (map (target: {
+    name = "device-priority-sanitizer-cycle-${target}";
+    source = "${pkg}/bin/device-priority-sanitizer-cycle-${target}";
+  }) allTargets)
+  # The set-<target> tier dropdown is only generated for managed targets —
+  # an empty tier list means the target is not auto-managed and has no tiers
+  # to offer.
+  ++ (map (target: {
+    name = "device-priority-sanitizer-set-${target}";
+    source = tierSetScript target;
+  }) (builtins.filter (target: cfg.${targetOptions.${target}} != [ ]) allTargets));
 
   # One-time migration from the audio-priority-sanitizer era: stops the old
   # launchd agent, removes its artifacts, and carries a *manual* (regular
@@ -317,18 +312,18 @@ in
   config = lib.mkIf (cfg.enable && isDarwin) {
     assertions = [
       {
+        # An empty list is valid: it means the target is not auto-managed
+        # (see AGENTS.md). Titles must be unique and non-empty when present.
         assertion =
-          cfg.outputs != [ ]
-          && lib.all (entry: entry.title != "") cfg.outputs
+          lib.all (entry: entry.title != "") cfg.outputs
           && lib.length (lib.unique (map (entry: entry.title) cfg.outputs)) == lib.length cfg.outputs;
-        message = "services.device-priority-sanitizer.outputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+        message = "services.device-priority-sanitizer.outputs must have unique, non-empty `title` values (titles are the Raycast tier dropdown values); it may be empty to leave the output unmanaged.";
       }
       {
         assertion =
-          cfg.inputs != [ ]
-          && lib.all (entry: entry.title != "") cfg.inputs
+          lib.all (entry: entry.title != "") cfg.inputs
           && lib.length (lib.unique (map (entry: entry.title) cfg.inputs)) == lib.length cfg.inputs;
-        message = "services.device-priority-sanitizer.inputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+        message = "services.device-priority-sanitizer.inputs must have unique, non-empty `title` values (titles are the Raycast tier dropdown values); it may be empty to leave the input unmanaged.";
       }
       {
         assertion =

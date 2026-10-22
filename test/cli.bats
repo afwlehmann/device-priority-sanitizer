@@ -381,6 +381,158 @@ CAMFLAGS=(--config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devi
   assert_status 64
 }
 
+# ── Prioritization switch ────────────────────────────────────────────────────
+# The master switch lives in a runtime state file (not the HM config) so the
+# menubar/CLI can toggle it without a rebuild. Missing → enabled; corrupt →
+# warning + enabled. An empty tier list is the per-target "not managed" state.
+
+@test "status defaults to enabled and reports per-target managed state" {
+  run $BIN --config "${FIXTURES}/config.json" status
+  assert_success
+  assert_has_line "prioritization: enabled"
+  assert_has_line "output: managed (3 tiers)"
+  assert_has_line "input: managed (3 tiers)"
+  assert_has_line "camera: not managed (0 tiers)"
+}
+
+@test "status --json reports the switch and per-target tiers" {
+  run $BIN --config "${FIXTURES}/config.json" --json status
+  assert_success
+  local enabled cameraManaged outputTiers
+  enabled="$(jq -r '.enabled' <<<"$output")"
+  cameraManaged="$(jq -r '.targets.camera.managed' <<<"$output")"
+  outputTiers="$(jq -r '.targets.output.tiers' <<<"$output")"
+  assert_equal "$enabled" "true"
+  assert_equal "$cameraManaged" "false"
+  assert_equal "$outputTiers" "3"
+}
+
+@test "status does not compile tier regexes (invalid regex still reports)" {
+  # config-invalid.json is valid JSON with an unparseable regex — status must
+  # still report the tiers because it never builds the engine.
+  run $BIN --config "${FIXTURES}/config-invalid.json" status
+  assert_success
+  assert_has_line "output: managed (1 tiers)"
+}
+
+@test "disable writes the state file and status reflects it" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN --state "$state" disable
+  assert_success
+  assert_output_is "prioritization: disabled"
+  jq -e '.prioritizationEnabled == false' "$state" >/dev/null
+  run $BIN --state "$state" status
+  assert_success
+  assert_has_line "prioritization: disabled"
+}
+
+@test "enable round-trips back to enabled" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN --state "$state" disable
+  assert_success
+  run $BIN --state "$state" enable
+  assert_success
+  assert_output_is "prioritization: enabled"
+  jq -e '.prioritizationEnabled == true' "$state" >/dev/null
+}
+
+@test "corrupt state falls back to enabled" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  printf 'garbage' >"$state"
+  run $BIN --state "$state" status
+  assert_success
+  assert_has_line "prioritization: enabled"
+}
+
+@test "reapply and auto respect the disabled switch" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN --state "$state" disable
+  assert_success
+  run $BIN "${CAMFLAGS[@]}" --state "$state" --dry-run reapply
+  assert_success
+  assert_has_line "output: skipped — prioritization disabled"
+  assert_has_line "input: skipped — prioritization disabled"
+  assert_has_line "camera: skipped — prioritization disabled"
+  run $BIN "${CAMFLAGS[@]}" --state "$state" --dry-run auto
+  assert_success
+  assert_has_line "camera: skipped — prioritization disabled"
+}
+
+@test "manual set and cycle still work while disabled" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN --state "$state" disable
+  assert_success
+  run $BIN "${CAMFLAGS[@]}" --state "$state" --dry-run set camera "iPhone Continuity Camera"
+  assert_success
+  assert_output_is "camera: would set to iPhone Continuity Camera"
+  run $BIN "${CAMFLAGS[@]}" --state "$state" --dry-run cycle camera
+  assert_success
+  assert_has_line "camera: would cycle to Elgato Cam Link 4K"
+}
+
+@test "empty camera tiers are not auto-managed" {
+  # config.json has no camera tiers; the cameras fixture is present — the
+  # camera target must be reported as not managed, not as "no device found".
+  run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-cameras.json" --dry-run auto
+  assert_success
+  assert_has_line "camera: not auto-managed (no priority tiers)"
+  run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-cameras.json" --dry-run reapply
+  assert_success
+  assert_has_line "camera: not auto-managed (no priority tiers)"
+}
+
+@test "menu-text renders the prioritization line and pause marker" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN "${CAMFLAGS[@]}" menu-text
+  assert_success
+  assert_has_line "prioritization: enabled"
+  refute_line_matches "pause.circle"
+  run $BIN --state "$state" disable
+  assert_success
+  run $BIN "${CAMFLAGS[@]}" --state "$state" menu-text
+  assert_success
+  assert_has_line "prioritization: disabled"
+  assert_line_matches "^status: .* pause\.circle$"
+}
+
+@test "menu-text shows the not-auto-managed row for unmanaged targets" {
+  run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-cameras.json" menu-text
+  assert_success
+  assert_has_line "  - Not auto-managed (no priority tiers)"
+}
+
+@test "status with invalid JSON shows the switch and exits 65" {
+  run $BIN --config "${FIXTURES}/config-broken.json" status
+  assert_failure
+  assert_status 65
+  assert_has_line "prioritization: enabled"
+  assert_has_line "targets: unavailable (invalid config)"
+}
+
+@test "enable and disable never load the tier config" {
+  # Even a broken config must not prevent toggling the switch.
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN --config "${FIXTURES}/config-broken.json" --state "$state" disable
+  assert_success
+  assert_output_is "prioritization: disabled"
+  run $BIN --config "${FIXTURES}/config-broken.json" --state "$state" enable
+  assert_success
+  assert_output_is "prioritization: enabled"
+}
+
+@test "switch commands reject trailing arguments and missing values" {
+  local state="${BATS_TEST_TMPDIR}/state.json"
+  run $BIN --state "$state" disable extra
+  assert_failure
+  assert_status 64
+  run $BIN --state "$state" status extra
+  assert_failure
+  assert_status 64
+  run $BIN --state
+  assert_failure
+  assert_status 64
+}
+
 @test "--help exits 0" {
   run $BIN --help
   assert_success

@@ -50,6 +50,18 @@ via plain `swiftc`.
     `questionmark.circle` + a "not managed" menu row.
   - `reapply` (menu/CLI/Raycast) is an explicit user action and bypasses the
     excluded-current guard.
+  - **Global switch**: the runtime state file (`State.swift`,
+    `state.json` — NOT the config, which Home Manager owns read-only)
+    gates every automatic write. Disabled → no startup/set-change/`reapply`
+    writes, `pause.circle` in the menubar, Reapply greyed; manual
+    `set`/`cycle` stay available; disabling never restores devices.
+    Menubar toggle and CLI `enable`/`disable` write the file; the CLI posts
+    a distributed notification so a running agent reloads (and applies, when
+    the switch turned on). Missing → enabled; corrupt → warning + enabled.
+  - **Per-target switch**: an empty tier list *is* the "not managed" state —
+    auto-selection and `reapply` skip the target, the UI shows a
+    "Not auto-managed" row, and the generated Raycast `set-<target>`
+    command is omitted. No separate boolean.
 - **Transport classification** (`TransportClass.isSynthetic`) is the single
   place deciding menu visibility and auto-selection eligibility — extending
   to AirPlay-as-managed is a one-place change. Camera transports:
@@ -132,6 +144,9 @@ device-priority-sanitizer set <output|input|camera> <name>
 device-priority-sanitizer set <output|input|camera> --tier <title>
 device-priority-sanitizer reapply
 device-priority-sanitizer cycle <output|input|camera>
+device-priority-sanitizer enable
+device-priority-sanitizer disable
+device-priority-sanitizer status [--json]
 device-priority-sanitizer menu-text        # test seam
 device-priority-sanitizer auto             # hidden test seam
 ```
@@ -156,6 +171,14 @@ device-priority-sanitizer auto             # hidden test seam
 - `list` includes excluded (synthetic) devices, tagged `[virtual]` etc.;
   `--json` adds `uid` (all targets), `excluded`/`transport`/`current`, and
   `deviceType` (the AVFoundation device type string, camera entries only).
+- `enable`/`disable` are state-only: they never load the tier config (a
+  broken config must not prevent disabling), write the state file atomically,
+  and post the state-changed notification when writing the *default* path —
+  an overridden `--state` (tests) never pokes the live agent. Write failure
+  → exit 70. `status` reads the config JSON without compiling regexes:
+  an invalid regex still reports tiers; invalid JSON still shows the switch
+  (`targets: unavailable (invalid config)`, exit 65); a missing config is
+  not an error (all targets `not managed`).
 - Trailing positional arguments a command does not consume are rejected with
   EX_USAGE (except `set`, where they are part of the name).
 - The menubar app is the same binary without a command (accessory app,

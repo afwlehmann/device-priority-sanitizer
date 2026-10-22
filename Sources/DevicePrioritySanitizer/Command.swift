@@ -2,6 +2,12 @@ import Foundation
 
 let programName = "device-priority-sanitizer"
 
+let programVersion = "0.2.0"
+
+func logStderr(_ message: String) {
+    FileHandle.standardError.write(Data("[\(programName)] \(message)\n".utf8))
+}
+
 // MARK: - Failure domain
 //
 // Expected outcomes are encoded with Swift's native error handling (typed
@@ -50,6 +56,7 @@ struct Options: Sendable {
     let helpRequested: Bool
     let configPath: String?
     let devicesPath: String?
+    let statePath: String?
     let dryRun: Bool
     let json: Bool
     let tier: String?
@@ -131,26 +138,36 @@ struct PlannedChange: Sendable {
     /// The current device is a synthetic (excluded) transport: auto-selection
     /// leaves it alone (only explicit user actions bypass this).
     let skippedExcluded: Bool
+    /// The target has no priority tiers — it is not auto-managed.
+    let skippedUnmanaged: Bool
+    /// The global prioritization switch is off.
+    let skippedDisabled: Bool
 }
 
 func planApply(
     source: DeviceSource,
     engine: PriorityEngine,
     devices: [MediaDevice],
-    force: Bool
+    force: Bool,
+    prioritizationEnabled: Bool = true
 ) -> [PlannedChange] {
     Target.allCases.map { target -> PlannedChange in
         let current = source.defaultDevice(for: target)
-        let skippedExcluded = !force && (current.map { !$0.isManaged } ?? false)
+        let skippedDisabled = !prioritizationEnabled
+        let skippedUnmanaged = prioritizationEnabled && !engine.isManaged(target)
+        let skippedExcluded =
+            prioritizationEnabled && !skippedUnmanaged && !force && (current.map { !$0.isManaged } ?? false)
         let device =
-            skippedExcluded
+            (skippedDisabled || skippedUnmanaged || skippedExcluded)
             ? nil
             : engine.targetDevice(target, current: current, devices: devices)
         return PlannedChange(
             target: target,
             device: device,
             current: current,
-            skippedExcluded: skippedExcluded
+            skippedExcluded: skippedExcluded,
+            skippedUnmanaged: skippedUnmanaged,
+            skippedDisabled: skippedDisabled
         )
     }
 }
@@ -159,6 +176,12 @@ func planApply(
 func renderPlan(_ plan: [PlannedChange], dryRun: Bool) -> [String] {
     plan.map { change -> String in
         let target = change.target.rawValue
+        if change.skippedDisabled {
+            return "\(target): skipped — prioritization disabled"
+        }
+        if change.skippedUnmanaged {
+            return "\(target): not auto-managed (no priority tiers)"
+        }
         if change.skippedExcluded {
             return "\(target): skipped — current '\(change.current?.name ?? "?")' is not managed"
         }
@@ -195,6 +218,9 @@ func performPlan(
 
 struct CommandOutput: Sendable {
     let lines: [String]
+    /// Non-zero when the command completed with a diagnostic partial result
+    /// (only `status` on an invalid config uses this); `nil` → exit 0.
+    var exitCode: Int32? = nil
 }
 
 func runList(
@@ -354,8 +380,12 @@ func runReapply(
 ) throws -> CommandOutput {
     try requirePositionalArguments(options, atMost: 1, usage: "reapply")
     try requireRealDeviceContext(options)
+    let prioritizationEnabled = resolveState(options.statePath ?? defaultStatePath()).prioritizationEnabled
     let devices = source.allDevices()
-    let plan = planApply(source: source, engine: engine, devices: devices, force: true)
+    let plan = planApply(
+        source: source, engine: engine, devices: devices, force: true,
+        prioritizationEnabled: prioritizationEnabled
+    )
     let lines = renderPlan(plan, dryRun: options.dryRun)
     try performPlan(plan, on: source, dryRun: options.dryRun)
     return CommandOutput(lines: lines)
@@ -389,23 +419,112 @@ func runCycle(
     return CommandOutput(lines: ["\(target.rawValue): cycled to \(next.name)"])
 }
 
+// MARK: - Prioritization switch (state only; never loads the tier config)
+
+/// `enable` / `disable`: write the state file and notify a running agent.
+/// Deliberately independent of the tier config — a broken config must never
+/// prevent disabling the service. An overridden `--state` path (tests) never
+/// pokes the live agent.
+func runPrioritizationSwitch(
+    _ options: Options,
+    enabled: Bool
+) throws -> CommandOutput {
+    let usage = enabled ? "enable" : "disable"
+    try requirePositionalArguments(options, atMost: 1, usage: usage)
+    let path = options.statePath ?? defaultStatePath()
+    do {
+        try saveState(PrioritizationState(prioritizationEnabled: enabled), to: path)
+    } catch {
+        throw CliFailure.software("failed to write state at \(path): \(error)")
+    }
+    if options.statePath == nil {
+        DistributedNotificationCenter.default().post(name: stateChangedNotificationName, object: nil)
+    }
+    return CommandOutput(lines: ["prioritization: \(enabled ? "enabled" : "disabled")"])
+}
+
+/// `status [--json]`: the global switch plus per-target managed state. Reads
+/// the config JSON but never compiles tier regexes — an invalid regex does
+/// not block status; invalid JSON still shows the global state and exits 65.
+func runStatus(_ options: Options) throws -> CommandOutput {
+    try requirePositionalArguments(options, atMost: 1, usage: "status [--json]")
+    let enabled = resolveState(options.statePath ?? defaultStatePath()).prioritizationEnabled
+
+    func render(_ config: AppConfig?) -> [String] {
+        let targets = Target.allCases.map { target in
+            let tiers = config.map { $0.entries(for: target) } ?? []
+            return (target, tiers)
+        }
+        if options.json {
+            let sections = Dictionary(
+                uniqueKeysWithValues: targets.map { target, tiers in
+                    (
+                        target.rawValue,
+                        ["managed": !tiers.isEmpty, "tiers": tiers.count] as [String: Any]
+                    )
+                })
+            let json: [String: Any] = ["enabled": enabled, "targets": sections]
+            guard
+                let data = try? JSONSerialization.data(
+                    withJSONObject: json, options: [.prettyPrinted, .sortedKeys]
+                )
+            else { return ["could not serialize status"] }
+            return [String(decoding: data, as: UTF8.self)]
+        }
+        return ["prioritization: \(enabled ? "enabled" : "disabled")"]
+            + targets.map { target, tiers in
+                tiers.isEmpty
+                    ? "\(target.rawValue): not managed (0 tiers)"
+                    : "\(target.rawValue): managed (\(tiers.count) tiers)"
+            }
+    }
+
+    let path = options.configPath ?? defaultConfigPath()
+    guard FileManager.default.fileExists(atPath: path) else {
+        // Missing config is not an error: every target is simply unmanaged.
+        return CommandOutput(lines: render(nil))
+    }
+    do {
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let config = try JSONDecoder().decode(AppConfig.self, from: data)
+        return CommandOutput(lines: render(config))
+    } catch {
+        let lines = ["prioritization: \(enabled ? "enabled" : "disabled")", "targets: unavailable (invalid config)"]
+        return CommandOutput(lines: lines, exitCode: 65)
+    }
+}
+
 // MARK: - menu-text (deterministic rendering of the dropdown + status icons)
 
-/// The current menubar status line: three slot symbols.
-func renderStatusLine(source: DeviceSource, engine: PriorityEngine) -> String {
-    let symbols = Target.allCases.map { engine.slotSymbol(for: source.defaultDevice(for: $0), target: $0) }
+/// The current menubar status line: three slot symbols plus the pause marker
+/// when prioritization is globally disabled.
+func renderStatusLine(
+    source: DeviceSource,
+    engine: PriorityEngine,
+    prioritizationEnabled: Bool
+) -> String {
+    var symbols = Target.allCases.map { engine.slotSymbol(for: source.defaultDevice(for: $0), target: $0) }
+    if !prioritizationEnabled {
+        symbols.append("pause.circle")
+    }
     return "status: " + symbols.joined(separator: " ")
 }
 
 func renderMenu(
     source: DeviceSource,
-    engine: PriorityEngine
+    engine: PriorityEngine,
+    prioritizationEnabled: Bool
 ) -> [String] {
     let devices = source.allDevices()
-    let statusLine = renderStatusLine(source: source, engine: engine)
+    let statusLine = renderStatusLine(source: source, engine: engine, prioritizationEnabled: prioritizationEnabled)
     let blocks: [String] = Target.allCases
         .flatMap { target -> [String] in
             var lines = ["\(target.menuLabel)-menu:"]
+            if !engine.isManaged(target) {
+                // No priority tiers: the target is not auto-managed — the
+                // empty tier list is the switch, there is no other flag.
+                lines.append("  - Not auto-managed (no priority tiers)")
+            }
             if let current = source.defaultDevice(for: target), !current.isManaged {
                 // Out-of-domain current device: the app deliberately does not
                 // touch it — say so instead of silently hiding it.
@@ -420,7 +539,7 @@ func renderMenu(
             lines.append(contentsOf: rows)
             return lines
         }
-    return [statusLine] + blocks
+    return ["prioritization: \(prioritizationEnabled ? "enabled" : "disabled")", statusLine] + blocks
 }
 
 // MARK: - Dispatch (registry wiring; logic lives in the run* functions)
@@ -439,14 +558,20 @@ func runCommand(
     case "cycle": return try runCycle(options, source: source, engine: engine)
     case "menu-text":
         try requirePositionalArguments(options, atMost: 1, usage: "menu-text")
-        return CommandOutput(lines: renderMenu(source: source, engine: engine))
+        let prioritizationEnabled = resolveState(options.statePath ?? defaultStatePath()).prioritizationEnabled
+        return CommandOutput(
+            lines: renderMenu(source: source, engine: engine, prioritizationEnabled: prioritizationEnabled))
     case "auto":
         // Hidden test seam: models the GUI's automatic path (list change →
         // per-target apply, respecting the excluded-current guard).
         try requirePositionalArguments(options, atMost: 1, usage: "auto")
         try requireRealDeviceContext(options)
+        let prioritizationEnabled = resolveState(options.statePath ?? defaultStatePath()).prioritizationEnabled
         let devices = source.allDevices()
-        let plan = planApply(source: source, engine: engine, devices: devices, force: false)
+        let plan = planApply(
+            source: source, engine: engine, devices: devices, force: false,
+            prioritizationEnabled: prioritizationEnabled
+        )
         let lines = renderPlan(plan, dryRun: options.dryRun)
         try performPlan(plan, on: source, dryRun: options.dryRun)
         return CommandOutput(lines: lines)

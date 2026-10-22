@@ -1,5 +1,15 @@
 import Foundation
 
+/// Config path resolution (I/O-free lookup; `--config` and the env override
+/// the macOS-native default).
+func defaultConfigPath() -> String {
+    if let envPath = ProcessInfo.processInfo.environment["DEVICE_PRIORITY_SANITIZER_CONFIG"] {
+        return envPath
+    }
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+    return "\(home)/Library/Application Support/device-priority-sanitizer/config.json"
+}
+
 /// One priority tier: a regex matched against device names plus the SF Symbol
 /// shown for devices of this tier. The list order encodes the priority — the
 /// first entry with a matching device wins (case-sensitive).

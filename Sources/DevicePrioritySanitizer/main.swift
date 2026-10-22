@@ -3,21 +3,7 @@ import AppKit
 import CoreAudio
 import Foundation
 
-let programVersion = "0.2.0"
-
-func logStderr(_ message: String) {
-    FileHandle.standardError.write(Data("[\(programName)] \(message)\n".utf8))
-}
-
 // MARK: - Config lookup (I/O boundary)
-
-func defaultConfigPath() -> String {
-    if let envPath = ProcessInfo.processInfo.environment["DEVICE_PRIORITY_SANITIZER_CONFIG"] {
-        return envPath
-    }
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    return "\(home)/Library/Application Support/device-priority-sanitizer/config.json"
-}
 
 /// Loads the config JSON; a missing file is a warning (empty priority lists),
 /// an unparseable file is `dataInvalid`.
@@ -53,6 +39,7 @@ func makeSource(from options: Options, config: AppConfig) throws -> DeviceSource
 func parseArguments(_ arguments: [String]) throws -> Options {
     var configPath: String?
     var devicesPath: String?
+    var statePath: String?
     var dryRun = false
     var json = false
     var tier: String?
@@ -72,6 +59,11 @@ func parseArguments(_ arguments: [String]) throws -> Options {
                 throw CliFailure.usage("--devices requires a path")
             }
             devicesPath = value
+        case "--state":
+            guard let value = iterator.next() else {
+                throw CliFailure.usage("--state requires a path")
+            }
+            statePath = value
         case "--tier":
             guard let value = iterator.next() else {
                 throw CliFailure.usage("--tier requires a title")
@@ -91,6 +83,7 @@ func parseArguments(_ arguments: [String]) throws -> Options {
         helpRequested: helpRequested,
         configPath: configPath,
         devicesPath: devicesPath,
+        statePath: statePath,
         dryRun: dryRun,
         json: json,
         tier: tier,
@@ -110,13 +103,17 @@ func printUsage() {
                                        Set the default device by name
           set <output|input|camera> --tier <title>
                                        Set the best connected device in a configured tier
-          reapply                       Force-apply the configured priority (all targets)
+          reapply                       Force-apply the configured priority (all managed targets)
           cycle <output|input|camera>  Advance to the next visible device (wrapping)
+          enable                        Enable automatic prioritization
+          disable                       Disable automatic prioritization
+          status [--json]               Show the switch and per-target managed state
           menu-text                     Print the dropdown as deterministic text (test seam)
 
         Flags:
           --config <path>    Config JSON (default: ~/Library/Application Support/device-priority-sanitizer/config.json)
           --devices <path>   Device table JSON fixture (headless test seam; writes require --dry-run)
+          --state <path>     Runtime state JSON (default: ~/Library/Application Support/device-priority-sanitizer/state.json)
           --tier <title>     Tier for `set` (titles come from the configured tiers)
           --dry-run          Report intended changes without applying them
           --json             Machine-readable output for `list`
@@ -139,6 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let source: DeviceSource
     private let engine: PriorityEngine
     private let menuController: MenuController
+    private let statePath: String
+    private var prioritizationEnabled: Bool
     private var devices: [MediaDevice] = []
     private var previousSets: [Target: Set<String>] = [:]
     private var debounceTimer: Timer?
@@ -149,13 +148,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var listeners: [RegisteredListener] = []
     private var cameraObservers: [NSObjectProtocol] = []
+    private var stateObserver: NSObjectProtocol?
     /// Class-property KVO context for `AVCaptureDevice.systemPreferredCamera`.
     private var preferredCameraKVOContext = 0
 
-    init(config: AppConfig, source: DeviceSource, engine: PriorityEngine) {
+    init(config: AppConfig, source: DeviceSource, engine: PriorityEngine, statePath: String) {
         self.config = config
         self.source = source
         self.engine = engine
+        self.statePath = statePath
+        prioritizationEnabled = resolveState(statePath).prioritizationEnabled
         menuController = MenuController(engine: engine, source: source)
         super.init()
     }
@@ -186,11 +188,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuController.onReapply = { [weak self] in
             guard let self = self else { return }
             // Explicit user action: bypasses the excluded-current guard.
+            // A globally disabled switch still wins — the menu item is
+            // greyed, but stay defensive here.
             let plan = planApply(
                 source: self.source,
                 engine: self.engine,
                 devices: self.devices,
-                force: true
+                force: true,
+                prioritizationEnabled: self.prioritizationEnabled
             )
             do {
                 try performPlan(plan, on: self.source, dryRun: false)
@@ -199,10 +204,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.refreshMenu()
         }
+        menuController.onTogglePrioritization = { [weak self] in
+            self?.togglePrioritization()
+        }
 
         registerListeners()
         registerCameraObservers()
+        registerStateObserver()
         reloadAndApply(initial: true)
+    }
+
+    // MARK: Prioritization switch
+
+    /// Menubar toggle: write the state, refresh, and apply immediately when
+    /// enabling. Disabling never restores previous devices — it only stops
+    /// future automatic writes. A failed write logs and reverts the menu.
+    private func togglePrioritization() {
+        let newValue = !prioritizationEnabled
+        do {
+            try saveState(
+                PrioritizationState(prioritizationEnabled: newValue), to: statePath
+            )
+        } catch {
+            logStderr("failed to write state at \(statePath): \(error)")
+            refreshMenu()
+            return
+        }
+        prioritizationEnabled = newValue
+        logStderr("prioritization \(newValue ? "enabled" : "disabled")")
+        if newValue {
+            reloadAndApply(initial: true)
+        } else {
+            refreshMenu()
+        }
+    }
+
+    /// The CLI posts `stateChanged` after writing the state file; reload and
+    /// apply when the switch was turned on, otherwise just refresh the menu.
+    private func registerStateObserver() {
+        stateObserver = DistributedNotificationCenter.default().addObserver(
+            forName: stateChangedNotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            let wasEnabled = self.prioritizationEnabled
+            self.prioritizationEnabled = resolveState(self.statePath).prioritizationEnabled
+            if self.prioritizationEnabled && !wasEnabled {
+                self.reloadAndApply(initial: true)
+            } else {
+                self.refreshMenu()
+            }
+        }
     }
 
     // MARK: Listeners
@@ -325,8 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Auto-selection: only on a per-target device-set change, never over a
-    /// synthetic (excluded) current device.
+    /// synthetic (excluded) current device, and never while the global
+    /// prioritization switch is off.
     private func applyAuto(target: Target) {
+        guard prioritizationEnabled else { return }
         if let current = source.defaultDevice(for: target), !current.isManaged {
             logStderr("skip \(target.rawValue): current '\(current.name)' is not managed")
             return
@@ -344,18 +399,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshMenu() {
-        menuController.update(devices: devices)
+        menuController.update(devices: devices, prioritizationEnabled: prioritizationEnabled)
     }
 }
 
 func runGUI(
     config: AppConfig,
     source: DeviceSource,
-    engine: PriorityEngine
+    engine: PriorityEngine,
+    statePath: String
 ) -> Never {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let delegate = AppDelegate(config: config, source: source, engine: engine)
+    let delegate = AppDelegate(config: config, source: source, engine: engine, statePath: statePath)
     app.delegate = delegate
     app.run()
     // NSApplication.run never returns on the GUI path; satisfy Never on all
@@ -365,12 +421,7 @@ func runGUI(
 
 // MARK: - Bootstrap (I/O boundary)
 
-func bootstrap() throws -> (options: Options, config: AppConfig, engine: PriorityEngine, source: DeviceSource) {
-    let options = try parseArguments(Array(CommandLine.arguments.dropFirst()))
-    if options.helpRequested {
-        printUsage()
-        exit(0)
-    }
+func bootstrap(_ options: Options) throws -> (config: AppConfig, engine: PriorityEngine, source: DeviceSource) {
     let config = try loadConfig(options.configPath)
     let engine: PriorityEngine
     do {
@@ -379,7 +430,7 @@ func bootstrap() throws -> (options: Options, config: AppConfig, engine: Priorit
         throw CliFailure.dataInvalid("\(error)")
     }
     let source = try makeSource(from: options, config: config)
-    return (options, config, engine, source)
+    return (config, engine, source)
 }
 
 func renderFailure(_ failure: CliFailure) -> Never {
@@ -389,15 +440,43 @@ func renderFailure(_ failure: CliFailure) -> Never {
     exit(failure.exitCode)
 }
 
+/// Prints command output and exits with its exit code (0 when unset).
+func finish(_ output: CommandOutput) -> Never {
+    output.lines.forEach { print($0) }
+    exit(output.exitCode ?? 0)
+}
+
 func main() -> Never {
     do {
-        let context = try bootstrap()
-        guard let command = context.options.positional.first else {
-            runGUI(config: context.config, source: context.source, engine: context.engine)
+        let options = try parseArguments(Array(CommandLine.arguments.dropFirst()))
+        if options.helpRequested {
+            printUsage()
+            exit(0)
         }
-        let output = try runCommand(command, context.options, context.source, context.engine)
-        output.lines.forEach { print($0) }
-        exit(0)
+        // The prioritization switch is state-only: enable/disable never load
+        // the tier config (a broken config must not prevent disabling), and
+        // status reads the config leniently without compiling tier regexes.
+        switch options.positional.first {
+        case "enable":
+            finish(try runPrioritizationSwitch(options, enabled: true))
+        case "disable":
+            finish(try runPrioritizationSwitch(options, enabled: false))
+        case "status":
+            finish(try runStatus(options))
+        default:
+            break
+        }
+        let context = try bootstrap(options)
+        guard let command = options.positional.first else {
+            runGUI(
+                config: context.config,
+                source: context.source,
+                engine: context.engine,
+                statePath: options.statePath ?? defaultStatePath()
+            )
+        }
+        let output = try runCommand(command, options, context.source, context.engine)
+        finish(output)
     } catch let failure as CliFailure {
         renderFailure(failure)
     } catch {
