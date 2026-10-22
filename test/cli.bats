@@ -2,7 +2,7 @@
 # bats require_minimum_version 1.7.0
 # shellcheck disable=SC2034 # BIN is supplied by the flake check and used across tests
 
-# Tests for the audio-priority-sanitizer CLI, run headlessly against
+# Tests for the device-priority-sanitizer CLI, run headlessly against
 # injected device-table fixtures (--devices) and --dry-run, so no real
 # audio hardware or GUI is touched.
 # Environment: BIN (built CLI), FIXTURES (fixture dir), TEST_HELPER.
@@ -279,5 +279,5 @@ assert_output_is_not_empty_by_jq() {
 @test "--help exits 0" {
   run $BIN --help
   assert_success
-  assert_line_matches "^Usage: audio-priority-sanitizer"
+  assert_line_matches "^Usage: device-priority-sanitizer"
 }

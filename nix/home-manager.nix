@@ -7,10 +7,10 @@
 }:
 
 let
-  cfg = config.services.audio-priority-sanitizer;
+  cfg = config.services.device-priority-sanitizer;
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
-  pkg = pkgs.callPackage ./pkgs/audio-priority-sanitizer { };
+  pkg = pkgs.callPackage ./pkgs/device-priority-sanitizer { };
 
   entrySubmodule = lib.types.submodule {
     options = {
@@ -55,7 +55,7 @@ let
     };
   };
 
-  configJson = pkgs.writeText "audio-priority-sanitizer-config.json" (
+  configJson = pkgs.writeText "device-priority-sanitizer-config.json" (
     builtins.toJSON {
       outputs = cfg.outputs;
       inputs = cfg.inputs;
@@ -65,23 +65,23 @@ let
     }
   );
 
-  logDir = "${config.home.homeDirectory}/Library/Logs/audio-priority-sanitizer";
+  logDir = "${config.home.homeDirectory}/Library/Logs/device-priority-sanitizer";
 
   # Creates the log directory and rotates the previous run's log to
-  # agent.log.1 on every launch (including KeepAlive crash restarts), so a
-  # crash loop keeps its evidence while growth stays bounded. The app's stdio
+  # agent.log.1 on every launch (including KeepAlive crash restarts), so
+  # a crash loop keeps its evidence while growth stays bounded. The app's stdio
   # is redirected here rather than via launchd's StandardOutPath: launchd opens
   # that file before exec'ing this wrapper, which would keep writing through
   # the descriptor of the renamed inode. Then execs the app with the store-path
   # config. The config is passed as `--config`: a bare positional argument
   # would be parsed as a CLI command.
-  agentWrapper = pkgs.writeShellScript "audio-priority-sanitizer-agent" ''
+  agentWrapper = pkgs.writeShellScript "device-priority-sanitizer-agent" ''
     set -eu
     ${pkgs.coreutils}/bin/mkdir -p "${logDir}"
     if [ -f "${logDir}/agent.log" ]; then
       ${pkgs.coreutils}/bin/mv -f "${logDir}/agent.log" "${logDir}/agent.log.1" || true
     fi
-    exec "${pkg}/Applications/audio-priority-sanitizer.app/Contents/MacOS/audio-priority-sanitizer" \
+    exec "${pkg}/Applications/device-priority-sanitizer.app/Contents/MacOS/device-priority-sanitizer" \
       --config "${configJson}" >>"${logDir}/agent.log" 2>&1
   '';
 
@@ -105,47 +105,74 @@ let
         }) entries;
       };
     in
-    pkgs.writeShellScript "audio-priority-sanitizer-set-${direction}" ''
+    pkgs.writeShellScript "device-priority-sanitizer-set-${direction}" ''
       # @raycast.schemaVersion 1
-      # @raycast.title Audio Priority: Set ${label}
+      # @raycast.title Device Priority: Set ${label}
       # @raycast.mode silent
       # @raycast.icon ${icon}
       # @raycast.description Set the default ${direction} device to the best connected device in a configured tier.
       # @raycast.author Alexander Lehmann
-      # @raycast.packageName Audio Priority Sanitizer
+      # @raycast.packageName Device Priority Sanitizer
       # @raycast.argument1 ${argument}
 
       set -euo pipefail
 
-      exec ${pkg}/bin/audio-priority-sanitizer set ${direction} --tier "$1"
+      exec ${pkg}/bin/device-priority-sanitizer set ${direction} --tier "$1"
     '';
 
   raycastCommands = [
     {
-      name = "audio-priority-sanitizer-reapply";
-      source = "${pkg}/bin/audio-priority-sanitizer-reapply";
+      name = "device-priority-sanitizer-reapply";
+      source = "${pkg}/bin/device-priority-sanitizer-reapply";
     }
     {
-      name = "audio-priority-sanitizer-cycle-output";
-      source = "${pkg}/bin/audio-priority-sanitizer-cycle-output";
+      name = "device-priority-sanitizer-cycle-output";
+      source = "${pkg}/bin/device-priority-sanitizer-cycle-output";
     }
     {
-      name = "audio-priority-sanitizer-cycle-input";
-      source = "${pkg}/bin/audio-priority-sanitizer-cycle-input";
+      name = "device-priority-sanitizer-cycle-input";
+      source = "${pkg}/bin/device-priority-sanitizer-cycle-input";
     }
     {
-      name = "audio-priority-sanitizer-set-output";
+      name = "device-priority-sanitizer-set-output";
       source = tierSetScript "output";
     }
     {
-      name = "audio-priority-sanitizer-set-input";
+      name = "device-priority-sanitizer-set-input";
       source = tierSetScript "input";
     }
   ];
+
+  # One-time migration from the audio-priority-sanitizer era: stops the old
+  # launchd agent, removes its artifacts, and carries a *manual* (regular
+  # file) config over to the new path. All steps are idempotent and tolerate
+  # Home Manager's own launchd/home.file cleanup having already run (or not).
+  migration =
+    let
+      oldLabel = "${username}.audio-priority-sanitizer";
+      oldSupportDir = "${config.home.homeDirectory}/Library/Application Support/audio-priority-sanitizer";
+      newConfigPath = "${config.home.homeDirectory}/Library/Application Support/device-priority-sanitizer/config.json";
+      oldApplications = "${config.home.homeDirectory}/Applications";
+    in
+    ''
+      if /bin/launchctl print "gui/$(id -u)/${oldLabel}" >/dev/null 2>&1; then
+        /bin/launchctl bootout "gui/$(id -u)/${oldLabel}" 2>/dev/null || true
+      fi
+      ${pkgs.coreutils}/bin/rm -f "${config.home.homeDirectory}/Library/LaunchAgents/${oldLabel}.plist"
+      if [ -d "${oldSupportDir}" ]; then
+        if [ -f "${oldSupportDir}/config.json" ] && [ ! -e "${newConfigPath}" ]; then
+          ${pkgs.coreutils}/bin/mkdir -p "${dirOf newConfigPath}"
+          ${pkgs.coreutils}/bin/cp "${oldSupportDir}/config.json" "${newConfigPath}"
+        fi
+        ${pkgs.coreutils}/bin/rm -f "${oldSupportDir}/config.json"
+        ${pkgs.coreutils}/bin/rmdir "${oldSupportDir}" 2>/dev/null || true
+      fi
+      ${pkgs.coreutils}/bin/rm -f "${oldApplications}"/audio-priority-sanitizer-*
+    '';
 in
 {
-  options.services.audio-priority-sanitizer = {
-    enable = lib.mkEnableOption "the audio device priority sanitizer (menubar app, CLI, Raycast commands)";
+  options.services.device-priority-sanitizer = {
+    enable = lib.mkEnableOption "the device priority sanitizer (menubar app, CLI, Raycast commands)";
 
     outputs = lib.mkOption {
       type = lib.types.listOf entrySubmodule;
@@ -239,21 +266,21 @@ in
           cfg.outputs != [ ]
           && lib.all (entry: entry.title != "") cfg.outputs
           && lib.length (lib.unique (map (entry: entry.title) cfg.outputs)) == lib.length cfg.outputs;
-        message = "services.audio-priority-sanitizer.outputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+        message = "services.device-priority-sanitizer.outputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
       }
       {
         assertion =
           cfg.inputs != [ ]
           && lib.all (entry: entry.title != "") cfg.inputs
           && lib.length (lib.unique (map (entry: entry.title) cfg.inputs)) == lib.length cfg.inputs;
-        message = "services.audio-priority-sanitizer.inputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+        message = "services.device-priority-sanitizer.inputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
       }
     ];
 
     home.packages = [ pkg ];
 
     home.file = {
-      "Library/Application Support/audio-priority-sanitizer/config.json".source = configJson;
+      "Library/Application Support/device-priority-sanitizer/config.json".source = configJson;
     }
     // (builtins.listToAttrs (
       map (command: {
@@ -265,13 +292,17 @@ in
       }) raycastCommands
     ));
 
-    launchd.agents.audio-priority-sanitizer = {
+    home.activation.devicePrioritySanitizerMigration = lib.hm.dag.entryAfter [
+      "writeBoundary"
+    ] migration;
+
+    launchd.agents.device-priority-sanitizer = {
       enable = true;
       config = {
         RunAtLoad = true;
         KeepAlive = true;
         ProcessType = "Background";
-        Label = "${username}.audio-priority-sanitizer";
+        Label = "${username}.device-priority-sanitizer";
         ProgramArguments = [ "${agentWrapper}" ];
       };
     };

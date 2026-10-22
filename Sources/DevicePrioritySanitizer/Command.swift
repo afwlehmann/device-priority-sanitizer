@@ -1,6 +1,6 @@
 import Foundation
 
-let programName = "audio-priority-sanitizer"
+let programName = "device-priority-sanitizer"
 
 // MARK: - Failure domain
 //

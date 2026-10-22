@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2154 # $status/$output are set by bats' `run` helper
-# Test helper for audio-priority-sanitizer/test/cli.bats — sourced by bats,
+# Test helper for device-priority-sanitizer/test/cli.bats — sourced by bats,
 # exposes assertion functions only. No `set -euo pipefail` here: bats owns the
 # shell options for each test, and forcing errexit in a sourced helper changes
 # `run`-based failure handling. Library guard per the shell-scripting skill.
-[ -n "${AUDIO_PRIORITY_TEST_HELPER:-}" ] && return 0
-AUDIO_PRIORITY_TEST_HELPER=1
+[ -n "${DEVICE_PRIORITY_TEST_HELPER:-}" ] && return 0
+DEVICE_PRIORITY_TEST_HELPER=1
 
 assert_success() {
   if [ "$status" -ne 0 ]; then

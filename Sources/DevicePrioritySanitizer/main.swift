@@ -2,7 +2,7 @@ import AppKit
 import CoreAudio
 import Foundation
 
-let programVersion = "0.1.0"
+let programVersion = "0.2.0"
 
 func logStderr(_ message: String) {
     FileHandle.standardError.write(Data("[\(programName)] \(message)\n".utf8))
@@ -11,11 +11,11 @@ func logStderr(_ message: String) {
 // MARK: - Config lookup (I/O boundary)
 
 func defaultConfigPath() -> String {
-    if let envPath = ProcessInfo.processInfo.environment["AUDIO_PRIORITY_SANITIZER_CONFIG"] {
+    if let envPath = ProcessInfo.processInfo.environment["DEVICE_PRIORITY_SANITIZER_CONFIG"] {
         return envPath
     }
     let home = FileManager.default.homeDirectoryForCurrentUser.path
-    return "\(home)/Library/Application Support/audio-priority-sanitizer/config.json"
+    return "\(home)/Library/Application Support/device-priority-sanitizer/config.json"
 }
 
 /// Loads the config JSON; a missing file is a warning (empty priority lists),
@@ -112,7 +112,7 @@ func printUsage() {
           menu-text                   Print the dropdown as deterministic text (test seam)
 
         Flags:
-          --config <path>    Config JSON (default: ~/Library/Application Support/audio-priority-sanitizer/config.json)
+          --config <path>    Config JSON (default: ~/Library/Application Support/device-priority-sanitizer/config.json)
           --devices <path>   Device table JSON fixture (headless test seam; writes require --dry-run)
           --tier <title>     Tier for `set` (titles come from the configured tiers)
           --dry-run          Report intended changes without applying them

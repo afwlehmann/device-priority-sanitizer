@@ -1,12 +1,12 @@
 #!@bash@
 #
 # @raycast.schemaVersion 1
-# @raycast.title Audio Priority: Cycle Input
+# @raycast.title Device Priority: Cycle Input
 # @raycast.mode silent
 # @raycast.icon 🎙️
 # @raycast.description Manually override the priority order: advance the default input device to the next visible one (wrapping).
 # @raycast.author Alexander Lehmann
-# @raycast.packageName Audio Priority Sanitizer
+# @raycast.packageName Device Priority Sanitizer
 
 set -euo pipefail
 shopt -s inherit_errexit

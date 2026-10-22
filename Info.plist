@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>alex.audio-priority-sanitizer</string>
+  <string>alex.device-priority-sanitizer</string>
   <key>CFBundleName</key>
-  <string>Audio Priority Sanitizer</string>
+  <string>Device Priority Sanitizer</string>
   <key>CFBundleExecutable</key>
-  <string>audio-priority-sanitizer</string>
+  <string>device-priority-sanitizer</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>0.2.0</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>
