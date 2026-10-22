@@ -43,18 +43,19 @@ func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: String) th
 
 /// Minimal in-memory source for unit tests: deterministic DeviceSource double
 /// with no hash-derived IDs, recording writes so tests can observe effects
-/// without any CoreAudio dependency.
-final class OverlaySource: DeviceSource {
-    private let devices: [AudioDevice]
-    private var current: [Direction: AudioDevice?]
+/// without any CoreAudio or AVFoundation dependency.
+final class OverlaySource: DeviceSource, @unchecked Sendable {
+    private let devices: [MediaDevice]
+    private var current: [Target: MediaDevice?]
     private let manageSoundEffects: Bool
-    private(set) var systemOutput: AudioDevice?
+    private(set) var systemOutput: MediaDevice?
     private(set) var usageCount = 0
 
     init(
-        devices: [AudioDevice],
+        devices: [MediaDevice],
         currentOutput: String?,
         currentInput: String?,
+        currentCamera: String? = nil,
         systemOutput: String? = nil,
         manageSoundEffects: Bool = true
     ) {
@@ -64,21 +65,22 @@ final class OverlaySource: DeviceSource {
         current = [
             .output: currentOutput.flatMap { byUID[$0] },
             .input: currentInput.flatMap { byUID[$0] },
+            .camera: currentCamera.flatMap { byUID[$0] },
         ]
         self.systemOutput = systemOutput.flatMap { byUID[$0] }
     }
 
-    func allDevices() -> [AudioDevice] { devices }
+    func allDevices() -> [MediaDevice] { devices }
 
-    func defaultDevice(for direction: Direction) -> AudioDevice? {
-        current[direction] ?? nil
+    func defaultDevice(for target: Target) -> MediaDevice? {
+        current[target] ?? nil
     }
 
     @discardableResult
-    func setDefault(_ device: AudioDevice, direction: Direction) -> OSStatus {
+    func setDefault(_ device: MediaDevice, target: Target) -> OSStatus {
         usageCount += 1
-        current[direction] = device
-        if direction == .output, manageSoundEffects {
+        current[target] = device
+        if target == .output, manageSoundEffects {
             systemOutput = device
         }
         return noErr
@@ -88,29 +90,45 @@ final class OverlaySource: DeviceSource {
 // MARK: - Fixtures (fresh values per call — tests stay fully isolated)
 
 enum Fixtures {
-    static func devices() -> [AudioDevice] {
+    static func devices() -> [MediaDevice] {
         [
-            AudioDevice(
-                id: 1, uid: "evolve", name: "Jabra Evolve 75 SE", transportClass: .bluetooth, isOutput: true,
-                isInput: true),
-            AudioDevice(
-                id: 2, uid: "jabra510", name: "Jabra SPEAK 510 USB", transportClass: .usb, isOutput: true, isInput: true
-            ),
-            AudioDevice(
-                id: 3, uid: "spk", name: "MacBook Pro Speakers", transportClass: .builtIn, isOutput: true,
-                isInput: false),
-            AudioDevice(
-                id: 4, uid: "mic", name: "MacBook Pro Microphone", transportClass: .builtIn, isOutput: false,
-                isInput: true),
-            AudioDevice(
-                id: 5, uid: "dell", name: "DELL U3824DW", transportClass: .displayPort, isOutput: true, isInput: false),
-            AudioDevice(
-                id: 6, uid: "teams", name: "Microsoft Teams Audio", transportClass: .virtual, isOutput: true,
-                isInput: true),
+            MediaDevice(
+                uid: "evolve", name: "Jabra Evolve 75 SE", transportClass: .bluetooth, deviceType: nil,
+                capabilities: [.output, .input]),
+            MediaDevice(
+                uid: "jabra510", name: "Jabra SPEAK 510 USB", transportClass: .usb, deviceType: nil,
+                capabilities: [.output, .input]),
+            MediaDevice(
+                uid: "spk", name: "MacBook Pro Speakers", transportClass: .builtIn, deviceType: nil,
+                capabilities: [.output]),
+            MediaDevice(
+                uid: "mic", name: "MacBook Pro Microphone", transportClass: .builtIn, deviceType: nil,
+                capabilities: [.input]),
+            MediaDevice(
+                uid: "dell", name: "DELL U3824DW", transportClass: .displayPort, deviceType: nil,
+                capabilities: [.output]),
+            MediaDevice(
+                uid: "teams", name: "Microsoft Teams Audio", transportClass: .virtual, deviceType: nil,
+                capabilities: [.output, .input]),
+            MediaDevice(
+                uid: "camlink", name: "Elgato Cam Link 4K", transportClass: .usb,
+                deviceType: "AVCaptureDeviceTypeExternal",
+                capabilities: [.camera]),
+            MediaDevice(
+                uid: "iphone", name: "iPhone Continuity Camera", transportClass: .continuity,
+                deviceType: "AVCaptureDeviceTypeContinuityCamera", capabilities: [.camera]),
+            MediaDevice(
+                uid: "facetime", name: "FaceTime HD Camera", transportClass: .builtIn,
+                deviceType: "AVCaptureDeviceTypeBuiltInWideAngleCamera",
+                capabilities: [.camera]),
+            MediaDevice(
+                uid: "obsvirtual", name: "OBS Virtual Camera", transportClass: .virtual, deviceType: nil,
+                capabilities: [.camera]),
         ]
     }
 
-    /// The documented configuration: Headset > Jabra speaker > internal.
+    /// The documented configuration: Headset > Jabra speaker > internal for
+    /// audio; External > Continuity > Built-in for cameras.
     static func engine() throws -> PriorityEngine {
         try PriorityEngine(
             config: AppConfig(
@@ -128,7 +146,14 @@ enum Fixtures {
                     PriorityEntry(
                         match: "MacBook Pro Microphone|Built-in", symbol: "laptopcomputer", title: "Built-in"),
                 ],
-                fallbackSymbol: FallbackSymbols(output: "speaker.wave.3", input: "mic"),
+                cameras: [
+                    PriorityEntry(
+                        match: "Cam Link|Elgato|Brio|C920|C922|C930|Kiyo|USB Video|USB Camera",
+                        symbol: "video", title: "External"),
+                    PriorityEntry(match: "iPhone|Continuity Camera", symbol: "iphone", title: "Continuity"),
+                    PriorityEntry(match: "FaceTime", symbol: "laptopcomputer", title: "Built-in"),
+                ],
+                fallbackSymbol: FallbackSymbols(output: "speaker.wave.3", input: "mic", camera: "video"),
                 debounceMs: 500
             )
         )
@@ -137,11 +162,12 @@ enum Fixtures {
     static func overlay(
         output: String?,
         input: String?,
+        camera: String? = nil,
         systemOutput: String? = nil,
         manageSoundEffects: Bool = true
     ) -> OverlaySource {
         OverlaySource(
-            devices: devices(), currentOutput: output, currentInput: input,
+            devices: devices(), currentOutput: output, currentInput: input, currentCamera: camera,
             systemOutput: systemOutput, manageSoundEffects: manageSoundEffects
         )
     }

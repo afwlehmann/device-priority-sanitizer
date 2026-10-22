@@ -1,0 +1,21 @@
+{
+  "devices": [
+    { "uid": "evolve", "name": "Jabra Evolve 75 SE", "transport": "bluetooth", "isOutput": true, "isInput": true },
+    { "uid": "xm2", "name": "WH-1000XM2", "transport": "bluetooth", "isOutput": true, "isInput": true },
+    { "uid": "earpods", "name": "EarPods", "transport": "usb", "isOutput": true, "isInput": true },
+    { "uid": "jabra510", "name": "Jabra SPEAK 510 USB", "transport": "usb", "isOutput": true, "isInput": true },
+    { "uid": "spk", "name": "MacBook Pro Speakers", "transport": "builtIn", "isOutput": true, "isInput": false },
+    { "uid": "mic", "name": "MacBook Pro Microphone", "transport": "builtIn", "isOutput": false, "isInput": true },
+    { "uid": "dell", "name": "DELL U3824DW", "transport": "displayPort", "isOutput": true, "isInput": false },
+    { "uid": "cam", "name": "Live Streamer CAM313 Microphone", "transport": "usb", "isOutput": false, "isInput": true },
+    { "uid": "teams", "name": "Microsoft Teams Audio", "transport": "virtual", "isOutput": true, "isInput": true },
+    { "uid": "camlink", "name": "Elgato Cam Link 4K", "transport": "usb", "isOutput": false, "isInput": false, "isCamera": true, "deviceType": "AVCaptureDeviceTypeExternal" },
+    { "uid": "iphone", "name": "iPhone Continuity Camera", "transport": "continuity", "isOutput": false, "isInput": false, "isCamera": true, "deviceType": "AVCaptureDeviceTypeContinuityCamera" },
+    { "uid": "facetime", "name": "FaceTime HD Camera", "transport": "builtIn", "isOutput": false, "isInput": false, "isCamera": true, "deviceType": "AVCaptureDeviceTypeBuiltInWideAngleCamera" },
+    { "uid": "obsvirtual", "name": "OBS Virtual Camera", "transport": "virtual", "isOutput": false, "isInput": false, "isCamera": true, "deviceType": "AVCaptureDeviceTypeExternal" }
+  ],
+  "defaultOutput": "evolve",
+  "defaultInput": "evolve",
+  "defaultSystemOutput": "spk",
+  "defaultCamera": "obsvirtual"
+}

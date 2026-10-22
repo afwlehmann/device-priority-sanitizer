@@ -1,0 +1,15 @@
+#!@bash@
+#
+# @raycast.schemaVersion 1
+# @raycast.title Device Priority: Cycle Camera
+# @raycast.mode silent
+# @raycast.icon 🎥
+# @raycast.description Manually override the priority order: advance the default camera to the next visible one (wrapping).
+# @raycast.author Alexander Lehmann
+# @raycast.packageName Device Priority Sanitizer
+
+set -euo pipefail
+shopt -s inherit_errexit
+# Note: errexit has exceptions inside if/&&/|| and pipelines — not used here.
+
+exec @cli@ cycle camera

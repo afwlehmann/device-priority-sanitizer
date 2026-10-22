@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import CoreAudio
 import Foundation
@@ -34,10 +35,11 @@ func loadConfig(_ explicitPath: String?) throws -> AppConfig {
     }
 }
 
-/// Real CoreAudio unless a fixture table was injected (headless test seam).
+/// Real CoreAudio + AVFoundation unless a fixture table was injected
+/// (headless test seam).
 func makeSource(from options: Options, config: AppConfig) throws -> DeviceSource {
     guard let devicesPath = options.devicesPath else {
-        return CoreAudioDeviceSource(manageSoundEffects: config.managesSoundEffects)
+        return SystemDeviceSource(manageSoundEffects: config.managesSoundEffects)
     }
     do {
         return try FixtureDeviceSource(path: devicesPath, manageSoundEffects: config.managesSoundEffects)
@@ -102,14 +104,15 @@ func printUsage() {
         Usage: \(programName) [flags] [command]
 
         Commands:
-          list [output|input]         List devices (current marked with *; includes excluded)
-          current [output|input]      Print current device name(s)
-          set <output|input> <name>   Set the default device by name
-          set <output|input> --tier <title>
-                                      Set the best connected device in a configured tier
-          reapply                     Force-apply the configured priority (both directions)
-          cycle <output|input>        Advance to the next visible device (wrapping)
-          menu-text                   Print the dropdown as deterministic text (test seam)
+          list [output|input|camera]    List devices (current marked with *; includes excluded)
+          current [output|input|camera] Print current device name(s)
+          set <output|input|camera> <name>
+                                       Set the default device by name
+          set <output|input|camera> --tier <title>
+                                       Set the best connected device in a configured tier
+          reapply                       Force-apply the configured priority (all targets)
+          cycle <output|input|camera>  Advance to the next visible device (wrapping)
+          menu-text                     Print the dropdown as deterministic text (test seam)
 
         Flags:
           --config <path>    Config JSON (default: ~/Library/Application Support/device-priority-sanitizer/config.json)
@@ -120,6 +123,9 @@ func printUsage() {
           --help             Show this help
 
         Without a command the app runs as a menubar accessory.
+
+        Cameras follow the system-preferred camera; apps with their own pinned
+        camera picker (e.g. Zoom) must be set to "System Default" to follow it.
 
         Exit codes: 64 usage, 65 invalid config/fixture, 66 no device, 3 ambiguous, 70 software error.
         """
@@ -133,8 +139,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let source: DeviceSource
     private let engine: PriorityEngine
     private let menuController: MenuController
-    private var devices: [AudioDevice] = []
-    private var previousSets: [Direction: Set<String>] = [:]
+    private var devices: [MediaDevice] = []
+    private var previousSets: [Target: Set<String>] = [:]
     private var debounceTimer: Timer?
     private struct RegisteredListener {
         let address: AudioObjectPropertyAddress
@@ -142,6 +148,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var listeners: [RegisteredListener] = []
+    private var cameraObservers: [NSObjectProtocol] = []
+    /// Class-property KVO context for `AVCaptureDevice.systemPreferredCamera`.
+    private var preferredCameraKVOContext = 0
 
     init(config: AppConfig, source: DeviceSource, engine: PriorityEngine) {
         self.config = config
@@ -152,25 +161,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        menuController.onSelect = { [weak self] direction, device in
+        menuController.onSelect = { [weak self] target, device in
             guard let self = self else { return }
-            let status = self.source.setDefault(device, direction: direction)
+            let status = self.source.setDefault(device, target: target)
             if status != noErr {
                 logStderr("failed to select \(device.name): OSStatus \(status)")
             }
             self.refreshMenu()
         }
-        menuController.onCycle = { [weak self] direction in
+        menuController.onCycle = { [weak self] target in
             guard let self = self else { return }
-            let current = self.source.defaultDevice(for: direction)
+            let current = self.source.defaultDevice(for: target)
             guard
-                let target = self.engine.cycleTarget(
-                    direction, current: current, devices: self.devices
+                let next = self.engine.cycleTarget(
+                    target, current: current, devices: self.devices
                 )
             else { return }
-            let status = self.source.setDefault(target, direction: direction)
+            let status = self.source.setDefault(next, target: target)
             if status != noErr {
-                logStderr("failed to cycle \(direction.rawValue) to \(target.name): OSStatus \(status)")
+                logStderr("failed to cycle \(target.rawValue) to \(next.name): OSStatus \(status)")
             }
             self.refreshMenu()
         }
@@ -192,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         registerListeners()
+        registerCameraObservers()
         reloadAndApply(initial: true)
     }
 
@@ -231,6 +241,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addListener(kAudioHardwarePropertyServiceRestarted) { [weak self] in self?.serviceRestarted() }
     }
 
+    /// Camera hotplug and preferred-camera changes: `wasConnected`/
+    /// `wasDisconnected` drive the debounced device-list pass; KVO on
+    /// `systemPreferredCamera` (a class property — documented as
+    /// KVO-observable) refreshes the menu when another app changes the
+    /// preferred camera.
+    private func registerCameraObservers() {
+        cameraObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasConnectedNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in self?.deviceListChanged() }
+        )
+        cameraObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: AVCaptureDevice.wasDisconnectedNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in self?.deviceListChanged() }
+        )
+        AVCaptureDevice.self.addObserver(
+            self,
+            forKeyPath: "systemPreferredCamera",
+            options: [.new],
+            context: &preferredCameraKVOContext
+        )
+    }
+
+    override func observeValue(
+        forKeyPath keyPath: String?,
+        of object: Any?,
+        change: [NSKeyValueChangeKey: Any]?,
+        context: UnsafeMutableRawPointer?
+    ) {
+        guard context == &preferredCameraKVOContext else {
+            super.observeValue(forKeyPath: keyPath, of: object, change: change, context: context)
+            return
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshMenu()
+        }
+    }
+
     // MARK: State transitions
 
     private func deviceListChanged() {
@@ -257,37 +310,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func reloadAndApply(initial: Bool) {
         devices = source.allDevices()
-        for direction in Direction.allCases {
+        for target in Target.allCases {
             let newSet = Set(
-                devices.filter { $0.isDirection(direction) }
+                devices.filter { $0.supports(target) }
                     .map { $0.uid }
             )
-            let old = previousSets[direction]
-            previousSets[direction] = newSet
+            let old = previousSets[target]
+            previousSets[target] = newSet
             if initial || old != newSet {
-                applyAuto(direction: direction)
+                applyAuto(target: target)
             }
         }
         refreshMenu()
     }
 
-    /// Auto-selection: only on a per-direction device-set change, never over a
+    /// Auto-selection: only on a per-target device-set change, never over a
     /// synthetic (excluded) current device.
-    private func applyAuto(direction: Direction) {
-        if let current = source.defaultDevice(for: direction), !current.isManaged {
-            logStderr("skip \(direction.rawValue): current '\(current.name)' is not managed")
+    private func applyAuto(target: Target) {
+        if let current = source.defaultDevice(for: target), !current.isManaged {
+            logStderr("skip \(target.rawValue): current '\(current.name)' is not managed")
             return
         }
         guard
-            let target = engine.targetDevice(
-                direction,
-                current: source.defaultDevice(for: direction),
+            let device = engine.targetDevice(
+                target,
+                current: source.defaultDevice(for: target),
                 devices: devices
             )
         else { return }
-        guard source.defaultDevice(for: direction)?.uid != target.uid else { return }
-        let status = source.setDefault(target, direction: direction)
-        logStderr("\(direction.rawValue): set to \(target.name) (status \(status))")
+        guard source.defaultDevice(for: target)?.uid != device.uid else { return }
+        let status = source.setDefault(device, target: target)
+        logStderr("\(target.rawValue): set to \(device.name) (status \(status))")
     }
 
     private func refreshMenu() {

@@ -21,11 +21,16 @@ struct PriorityEntry: Codable, Equatable, Sendable {
 struct FallbackSymbols: Codable, Equatable, Sendable {
     let output: String
     let input: String
+    /// Absent in pre-camera configs; falls back to `video`.
+    var camera: String? = nil
 }
 
 struct AppConfig: Codable, Equatable, Sendable {
     var outputs: [PriorityEntry]
     var inputs: [PriorityEntry]
+    /// Camera priority tiers. Absent in pre-camera configs — decodes as an
+    /// empty list, which leaves the camera target unmanaged.
+    var cameras: [PriorityEntry]? = nil
     var fallbackSymbol: FallbackSymbols?
     var debounceMs: Int?
     var manageSoundEffects: Bool? = nil
@@ -37,15 +42,22 @@ struct AppConfig: Codable, Equatable, Sendable {
     /// Sound effects/alert device follows the default output unless disabled.
     var managesSoundEffects: Bool { manageSoundEffects ?? true }
 
-    func entries(for direction: Direction) -> [PriorityEntry] {
-        direction == .output ? outputs : inputs
+    func entries(for target: Target) -> [PriorityEntry] {
+        switch target {
+        case .output: return outputs
+        case .input: return inputs
+        case .camera: return cameras ?? []
+        }
     }
 
-    func fallback(for direction: Direction) -> String {
-        switch (direction, fallbackSymbol) {
+    func fallback(for target: Target) -> String {
+        switch (target, fallbackSymbol) {
         case (.output, .some(let symbols)): return symbols.output
         case (.input, .some(let symbols)): return symbols.input
-        default: return direction == .output ? "speaker.wave.3" : "mic"
+        case (.camera, .some(let symbols)): return symbols.camera ?? "video"
+        case (.output, .none): return "speaker.wave.3"
+        case (.input, .none): return "mic"
+        case (.camera, .none): return "video"
         }
     }
 }

@@ -1,19 +1,20 @@
 import Foundation
 
 // The unit test cases. Pure logic only — the DeviceSource doubles keep every
-// test fully isolated from CoreAudio, and each test builds fresh fixtures.
+// test fully isolated from CoreAudio and AVFoundation, and each test builds
+// fresh fixtures.
 
 func runUnitTests() {
     // MARK: Regex semantics
 
     run("matching is case-sensitive") {
         let engine = try Fixtures.engine()
-        let caseMismatched = AudioDevice(
-            id: 9, uid: "lower", name: "jabra speak 510 usb",
-            transportClass: .usb, isOutput: true, isInput: true
+        let caseMismatched = MediaDevice(
+            uid: "lower", name: "jabra speak 510 usb",
+            transportClass: .usb, deviceType: nil, capabilities: [.output, .input]
         )
         try expectEqual(
-            engine.entrySymbol(for: caseMismatched, direction: .output),
+            engine.entrySymbol(for: caseMismatched, target: .output),
             "speaker.wave.3",
             "lowercase name must fall through to the fallback"
         )
@@ -21,12 +22,12 @@ func runUnitTests() {
 
     run("matching is unanchored") {
         let engine = try Fixtures.engine()
-        let stereo = AudioDevice(
-            id: 10, uid: "stereo", name: "Jabra SPEAK 510 USB (Stereo)",
-            transportClass: .usb, isOutput: true, isInput: true
+        let stereo = MediaDevice(
+            uid: "stereo", name: "Jabra SPEAK 510 USB (Stereo)",
+            transportClass: .usb, deviceType: nil, capabilities: [.output, .input]
         )
         try expectEqual(
-            engine.entrySymbol(for: stereo, direction: .output),
+            engine.entrySymbol(for: stereo, target: .output),
             "hifispeaker.fill",
             "pattern must match a substring of the name"
         )
@@ -35,11 +36,11 @@ func runUnitTests() {
     run("alternation matches every token of the tier") {
         let engine = try Fixtures.engine()
         for (uid, name) in [("h1", "Jabra Evolve 75 SE"), ("h2", "WH-1000XM2"), ("h3", "EarPods")] {
-            let device = AudioDevice(
-                id: 21, uid: uid, name: name, transportClass: .bluetooth, isOutput: true, isInput: true
+            let device = MediaDevice(
+                uid: uid, name: name, transportClass: .bluetooth, deviceType: nil, capabilities: [.output, .input]
             )
             try expectEqual(
-                engine.entrySymbol(for: device, direction: .input),
+                engine.entrySymbol(for: device, target: .input),
                 "headphones",
                 "device \(name)"
             )
@@ -88,9 +89,9 @@ func runUnitTests() {
 
     run("unmatched devices sort alphabetically after the tiers") {
         let engine = try Fixtures.engine()
-        let extra = AudioDevice(
-            id: 31, uid: "generic", name: "Aardvark USB Audio",
-            transportClass: .usb, isOutput: true, isInput: false
+        let extra = MediaDevice(
+            uid: "generic", name: "Aardvark USB Audio",
+            transportClass: .usb, deviceType: nil, capabilities: [.output]
         )
         let ordered = engine.orderedManagedDevices(.output, devices: Fixtures.devices() + [extra])
         try expectEqual(
@@ -117,8 +118,8 @@ func runUnitTests() {
 
     run("output and input are independent") {
         let engine = try Fixtures.engine()
-        let outputOnly = Fixtures.devices().filter { $0.isOutput }
-        let inputOnly = Fixtures.devices().filter { $0.isInput }
+        let outputOnly = Fixtures.devices().filter { $0.supports(.output) }
+        let inputOnly = Fixtures.devices().filter { $0.supports(.input) }
         try expectEqual(
             engine.targetDevice(.output, current: nil, devices: outputOnly)?.uid,
             "evolve",
@@ -165,6 +166,70 @@ func runUnitTests() {
         )
     }
 
+    // MARK: Camera priority
+
+    run("camera tiers order External > Continuity > Built-in") {
+        let engine = try Fixtures.engine()
+        let ordered = engine.orderedManagedDevices(.camera, devices: Fixtures.devices())
+        try expectEqual(
+            ordered.map { $0.name },
+            ["Elgato Cam Link 4K", "iPhone Continuity Camera", "FaceTime HD Camera"],
+            "camera tier order, virtual camera excluded"
+        )
+    }
+
+    run("camera target falls through absent tiers") {
+        let engine = try Fixtures.engine()
+        let devices = Fixtures.devices()
+        try expectEqual(
+            engine.targetDevice(.camera, current: nil, devices: devices.filter { $0.uid != "camlink" })?.uid,
+            "iphone",
+            "external tier absent → continuity wins"
+        )
+        try expectEqual(
+            engine
+                .targetDevice(
+                    .camera, current: nil,
+                    devices: devices.filter { $0.uid != "camlink" && $0.uid != "iphone" }
+                )?
+                .uid,
+            "facetime",
+            "external and continuity absent → built-in wins"
+        )
+    }
+
+    run("camera current is kept within the winning tier") {
+        let engine = try Fixtures.engine()
+        let devices = Fixtures.devices()
+        let camlink = devices.first { $0.uid == "camlink" }!
+        try expectEqual(
+            engine.targetDevice(.camera, current: camlink, devices: devices)?.uid,
+            "camlink",
+            "current winner-tier camera kept"
+        )
+        let facetime = devices.first { $0.uid == "facetime" }!
+        try expectEqual(
+            engine.targetDevice(.camera, current: facetime, devices: devices)?.uid,
+            "camlink",
+            "lower-tier current is replaced"
+        )
+    }
+
+    run("empty camera list leaves the camera unmanaged") {
+        let engine = try PriorityEngine(
+            config: AppConfig(outputs: [], inputs: [], fallbackSymbol: nil, debounceMs: nil)
+        )
+        try check(
+            engine.targetDevice(.camera, current: nil, devices: Fixtures.devices()) == nil,
+            "no camera tiers → no camera target"
+        )
+        try expectEqual(
+            engine.tierTarget(.camera, title: "External", current: nil, devices: Fixtures.devices()),
+            .unknownTier,
+            "unknown tier without camera tiers"
+        )
+    }
+
     // MARK: Cycle
 
     run("cycle advances in visible menu order") {
@@ -196,13 +261,24 @@ func runUnitTests() {
         )
     }
 
-    run("cycle is per-direction") {
+    run("cycle is per-target") {
         let engine = try Fixtures.engine()
         let mic = Fixtures.devices().first { $0.uid == "mic" }!
         try expectEqual(
             engine.cycleTarget(.input, current: mic, devices: Fixtures.devices())?.uid,
             "evolve",
             "input cycle order"
+        )
+    }
+
+    run("cycle camera wraps from the built-in tier") {
+        let engine = try Fixtures.engine()
+        let devices = Fixtures.devices()
+        let facetime = devices.first { $0.uid == "facetime" }!
+        try expectEqual(
+            engine.cycleTarget(.camera, current: facetime, devices: devices)?.uid,
+            "camlink",
+            "camera cycle wraps to the first tier"
         )
     }
 
@@ -216,21 +292,35 @@ func runUnitTests() {
         let mic = devices.first { $0.uid == "mic" }!
         let dell = devices.first { $0.uid == "dell" }!
         let teams = devices.first { $0.uid == "teams" }!
+        let camlink = devices.first { $0.uid == "camlink" }!
+        let facetime = devices.first { $0.uid == "facetime" }!
 
-        try expectEqual(engine.slotSymbol(for: evolve, direction: .output), "headphones", "tier symbol")
-        try expectEqual(engine.slotSymbol(for: mic, direction: .input), "laptopcomputer", "internal symbol")
+        try expectEqual(engine.slotSymbol(for: evolve, target: .output), "headphones", "tier symbol")
+        try expectEqual(engine.slotSymbol(for: mic, target: .input), "laptopcomputer", "internal symbol")
         try expectEqual(
-            engine.slotSymbol(for: spk, direction: .input),
+            engine.slotSymbol(for: spk, target: .input),
             "mic",
-            "output-only device falls back for the input direction"
+            "output-only device falls back for the input target"
         )
-        try expectEqual(engine.slotSymbol(for: dell, direction: .output), "speaker.wave.3", "fallback symbol")
+        try expectEqual(engine.slotSymbol(for: dell, target: .output), "speaker.wave.3", "fallback symbol")
         try expectEqual(
-            engine.slotSymbol(for: teams, direction: .output),
+            engine.slotSymbol(for: teams, target: .output),
             PriorityEngine.excludedSymbol,
             "excluded symbol"
         )
-        try expectEqual(engine.slotSymbol(for: nil, direction: .input), "mic", "no-device fallback")
+        try expectEqual(engine.slotSymbol(for: nil, target: .input), "mic", "no-device fallback")
+        try expectEqual(engine.slotSymbol(for: camlink, target: .camera), "video", "camera tier symbol")
+        try expectEqual(
+            engine.slotSymbol(for: facetime, target: .camera),
+            "laptopcomputer",
+            "built-in camera symbol"
+        )
+        try expectEqual(
+            engine.slotSymbol(for: devices.first { $0.uid == "obsvirtual" }, target: .camera),
+            PriorityEngine.excludedSymbol,
+            "virtual camera excluded symbol"
+        )
+        try expectEqual(engine.slotSymbol(for: nil, target: .camera), "video", "camera no-device fallback")
     }
 
     // MARK: Config decoding
@@ -247,6 +337,7 @@ func runUnitTests() {
         let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         try expectEqual(config.outputs.count, 1, "one output tier")
         try expectEqual(config.fallback(for: .input), "mic", "input fallback")
+        try expectEqual(config.fallback(for: .camera), "video", "camera fallback defaults")
         try expectEqual(config.debounceInterval, 0.5, "debounce interval")
     }
 
@@ -255,6 +346,29 @@ func runUnitTests() {
         try expectEqual(config.debounceInterval, 0.5, "default debounce")
         try expectEqual(config.fallback(for: .output), "speaker.wave.3", "default output fallback")
         try expectEqual(config.fallback(for: .input), "mic", "default input fallback")
+        try expectEqual(config.fallback(for: .camera), "video", "default camera fallback")
+    }
+
+    run("cameras decode and default to empty for legacy configs") {
+        let legacy = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(#"{"outputs": [], "inputs": []}"#.utf8)
+        )
+        try expectEqual(legacy.entries(for: .camera), [], "legacy config has no camera tiers")
+        let camera = try JSONDecoder().decode(
+            AppConfig.self,
+            from: Data(
+                #"""
+                {"outputs": [], "inputs": [],
+                 "cameras": [{"title": "External", "match": "Cam Link", "symbol": "video"}]}
+                """#.utf8)
+        )
+        try expectEqual(camera.entries(for: .camera).count, 1, "camera tiers decode")
+        try expectEqual(
+            camera.fallback(for: .camera),
+            "video",
+            "camera fallback without explicit symbol"
+        )
     }
 
     run("sound-effects management defaults to enabled and decodes explicit false") {
@@ -310,9 +424,9 @@ func runUnitTests() {
     run("duplicate exact names are ambiguous") {
         // Two identical headsets share a name: exact matching must not silently
         // pick one of them.
-        let twin = AudioDevice(
-            id: 41, uid: "evolve-twin", name: "Jabra Evolve 75 SE",
-            transportClass: .bluetooth, isOutput: true, isInput: true
+        let twin = MediaDevice(
+            uid: "evolve-twin", name: "Jabra Evolve 75 SE",
+            transportClass: .bluetooth, deviceType: nil, capabilities: [.output, .input]
         )
         let match = resolveDevice(
             .output, name: "Jabra Evolve 75 SE", devices: Fixtures.devices() + [twin]
@@ -330,10 +444,14 @@ func runUnitTests() {
         }
     }
 
-    run("direction filters candidates") {
+    run("target filters candidates") {
         let match = resolveDevice(.input, name: "DELL", devices: Fixtures.devices())
         guard case .notFound = match else {
-            throw UnitTestFailure("expected notFound for the wrong direction, got \(match)")
+            throw UnitTestFailure("expected notFound for the wrong target, got \(match)")
+        }
+        let camera = resolveDevice(.camera, name: "OBS Virtual Camera", devices: Fixtures.devices())
+        guard case .matched = camera else {
+            throw UnitTestFailure("expected the virtual camera to resolve explicitly, got \(camera)")
         }
     }
 
@@ -365,7 +483,7 @@ func runUnitTests() {
         try expectEqual(target.uid, "jabra510", "current speaker kept")
     }
 
-    run("tier selection is per direction") {
+    run("tier selection is per target") {
         let engine = try Fixtures.engine()
         guard
             case .device(let target) = engine.tierTarget(
@@ -374,6 +492,17 @@ func runUnitTests() {
             throw UnitTestFailure("expected the built-in input tier to resolve")
         }
         try expectEqual(target.uid, "mic", "built-in input")
+    }
+
+    run("camera tier selection resolves within the chosen tier") {
+        let engine = try Fixtures.engine()
+        guard
+            case .device(let target) = engine.tierTarget(
+                .camera, title: "Continuity", current: nil, devices: Fixtures.devices())
+        else {
+            throw UnitTestFailure("expected the continuity tier to resolve")
+        }
+        try expectEqual(target.uid, "iphone", "continuity camera")
     }
 
     run("unknown tier is reported, not resolved") {
@@ -395,43 +524,47 @@ func runUnitTests() {
         let engine = try Fixtures.engine()
         try expectEqual(
             engine.tierTitles(.output), ["Headset", "Speaker", "Built-in"], "output titles")
+        try expectEqual(
+            engine.tierTitles(.camera), ["External", "Continuity", "Built-in"], "camera titles")
     }
 
     // MARK: Planning (excluded-current guard, force bypass)
 
     run("auto: excluded current device is skipped without touching it") {
         let engine = try Fixtures.engine()
-        let source = Fixtures.overlay(output: "teams", input: "teams")
+        let source = Fixtures.overlay(output: "teams", input: "teams", camera: "obsvirtual")
         let plan = planApply(source: source, engine: engine, devices: Fixtures.devices(), force: false)
         try check(plan.allSatisfy(\.skippedExcluded), "every change must be skipped")
-        try check(plan.allSatisfy { $0.target == nil }, "no targets may be computed")
+        try check(plan.allSatisfy { $0.device == nil }, "no targets may be computed")
         try expectEqual(source.usageCount, 0, "no writes may happen")
     }
 
     run("reapply (force) bypasses the excluded-current guard") {
         let engine = try Fixtures.engine()
-        let source = Fixtures.overlay(output: "teams", input: "teams")
+        let source = Fixtures.overlay(output: "teams", input: "teams", camera: "obsvirtual")
         let plan = planApply(source: source, engine: engine, devices: Fixtures.devices(), force: true)
         try check(!plan.isEmpty, "plan must exist")
-        try check(plan.allSatisfy { $0.target != nil }, "targets must be computed")
+        try check(plan.allSatisfy { $0.device != nil }, "targets must be computed")
     }
 
     run("perform applies only role-set deltas") {
         let engine = try Fixtures.engine()
-        let source = Fixtures.overlay(output: "jabra510", input: "mic")
+        let source = Fixtures.overlay(output: "jabra510", input: "mic", camera: "facetime")
         let plan = planApply(source: source, engine: engine, devices: Fixtures.devices(), force: true)
         try performPlan(plan, on: source, dryRun: false)
         try expectEqual(source.defaultDevice(for: .output)?.uid, "evolve", "output after apply")
         try expectEqual(source.defaultDevice(for: .input)?.uid, "evolve", "input after apply")
+        try expectEqual(source.defaultDevice(for: .camera)?.uid, "camlink", "camera after apply")
     }
 
     run("dry-run performs no writes") {
         let engine = try Fixtures.engine()
-        let source = Fixtures.overlay(output: "jabra510", input: "mic")
+        let source = Fixtures.overlay(output: "jabra510", input: "mic", camera: "facetime")
         let plan = planApply(source: source, engine: engine, devices: Fixtures.devices(), force: true)
         try performPlan(plan, on: source, dryRun: true)
         try expectEqual(source.defaultDevice(for: .output)?.uid, "jabra510", "output unchanged")
         try expectEqual(source.defaultDevice(for: .input)?.uid, "mic", "input unchanged")
+        try expectEqual(source.defaultDevice(for: .camera)?.uid, "facetime", "camera unchanged")
         try expectEqual(source.usageCount, 0, "no writes may happen")
     }
 
@@ -440,7 +573,7 @@ func runUnitTests() {
     run("output writes mirror the sound-effects device") {
         let source = Fixtures.overlay(output: "spk", input: "mic", systemOutput: "spk")
         let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
-        _ = source.setDefault(evolve, direction: .output)
+        _ = source.setDefault(evolve, target: .output)
         try expectEqual(source.defaultDevice(for: .output)?.uid, "evolve", "output set")
         try expectEqual(source.systemOutput?.uid, "evolve", "effects device follows output")
     }
@@ -448,8 +581,16 @@ func runUnitTests() {
     run("input writes leave the sound-effects device untouched") {
         let source = Fixtures.overlay(output: "spk", input: "mic", systemOutput: "spk")
         let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
-        _ = source.setDefault(evolve, direction: .input)
+        _ = source.setDefault(evolve, target: .input)
         try expectEqual(source.defaultDevice(for: .input)?.uid, "evolve", "input set")
+        try expectEqual(source.systemOutput?.uid, "spk", "effects device unchanged")
+    }
+
+    run("camera writes leave the sound-effects device untouched") {
+        let source = Fixtures.overlay(output: "spk", input: "mic", systemOutput: "spk")
+        let camlink = Fixtures.devices().first { $0.uid == "camlink" }!
+        _ = source.setDefault(camlink, target: .camera)
+        try expectEqual(source.defaultDevice(for: .camera)?.uid, "camlink", "camera set")
         try expectEqual(source.systemOutput?.uid, "spk", "effects device unchanged")
     }
 
@@ -458,7 +599,7 @@ func runUnitTests() {
             output: "spk", input: "mic", systemOutput: "spk", manageSoundEffects: false
         )
         let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
-        _ = source.setDefault(evolve, direction: .output)
+        _ = source.setDefault(evolve, target: .output)
         try expectEqual(source.defaultDevice(for: .output)?.uid, "evolve", "output set")
         try expectEqual(source.systemOutput?.uid, "spk", "effects device unchanged")
     }
@@ -478,19 +619,25 @@ func runUnitTests() {
         let source = FixtureDeviceSource(
             devices: Fixtures.devices(), defaultOutput: "jabra510", defaultInput: "mic"
         )
-        try expectEqual(source.allDevices().count, 6, "device count")
+        try expectEqual(source.allDevices().count, 10, "device count")
         try expectEqual(source.defaultDevice(for: .output)?.uid, "jabra510", "output current")
         try expectEqual(source.defaultDevice(for: .input)?.uid, "mic", "input current")
+        try check(source.defaultDevice(for: .camera) == nil, "no camera current")
     }
 
-    run("fixture setDefault mutates only the targeted direction") {
+    run("fixture setDefault mutates only the targeted device class") {
         let source = FixtureDeviceSource(
             devices: Fixtures.devices(), defaultOutput: "jabra510", defaultInput: "mic"
         )
         let spk = Fixtures.devices().first { $0.uid == "spk" }!
-        _ = source.setDefault(spk, direction: .output)
+        _ = source.setDefault(spk, target: .output)
         try expectEqual(source.defaultDevice(for: .output)?.uid, "spk", "output changed")
         try expectEqual(source.defaultDevice(for: .input)?.uid, "mic", "input unchanged")
+        try expectEqual(source.defaultDevice(for: .camera)?.uid, nil, "camera unchanged")
+        let camlink = Fixtures.devices().first { $0.uid == "camlink" }!
+        _ = source.setDefault(camlink, target: .camera)
+        try expectEqual(source.defaultDevice(for: .camera)?.uid, "camlink", "camera changed")
+        try expectEqual(source.defaultDevice(for: .output)?.uid, "spk", "output still unchanged")
     }
 
     run("fixture source mirrors effects on output and records its initial pointer") {
@@ -500,7 +647,7 @@ func runUnitTests() {
         )
         try expectEqual(source.systemOutputDevice()?.uid, "dell", "initial effects pointer")
         let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
-        _ = source.setDefault(evolve, direction: .output)
+        _ = source.setDefault(evolve, target: .output)
         try expectEqual(source.systemOutputDevice()?.uid, "evolve", "mirrored effects pointer")
     }
 
@@ -510,14 +657,35 @@ func runUnitTests() {
             defaultSystemOutput: "dell", manageSoundEffects: false
         )
         let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
-        _ = source.setDefault(evolve, direction: .output)
+        _ = source.setDefault(evolve, target: .output)
         try expectEqual(source.systemOutputDevice()?.uid, "dell", "effects pointer untouched")
+    }
+
+    run("fixture JSON with cameras decodes, and legacy tables still work") {
+        let legacy = """
+            {"devices": [
+              {"uid": "a", "name": "A", "transport": "usb", "isOutput": true, "isInput": false}
+            ], "defaultOutput": "a", "defaultInput": null}
+            """
+        let legacyFixture = try JSONDecoder().decode(FixtureData.self, from: Data(legacy.utf8))
+        try expectEqual(legacyFixture.devices.first?.isCamera ?? false, false, "legacy has no camera flag")
+
+        let withCameras = """
+            {"devices": [
+              {"uid": "a", "name": "A", "transport": "usb", "isOutput": false, "isInput": false, "isCamera": true},
+              {"uid": "b", "name": "B", "transport": "virtual", "isOutput": false, "isInput": false, "isCamera": true}
+            ], "defaultOutput": null, "defaultInput": null, "defaultCamera": "a"}
+            """
+        let fixture = try JSONDecoder().decode(FixtureData.self, from: Data(withCameras.utf8))
+        try expectEqual(fixture.defaultCamera, "a", "camera current pointer decodes")
+        try expectEqual(fixture.devices.count, 2, "camera devices decode")
     }
 
     run("missing current pointer yields nil") {
         let source = FixtureDeviceSource(devices: Fixtures.devices(), defaultOutput: nil, defaultInput: nil)
         try check(source.defaultDevice(for: .output) == nil, "no output default")
         try check(source.defaultDevice(for: .input) == nil, "no input default")
+        try check(source.defaultDevice(for: .camera) == nil, "no camera default")
     }
 
     // MARK: Menu rendering (deterministic)
@@ -527,7 +695,7 @@ func runUnitTests() {
         let source = Fixtures.overlay(output: "jabra510", input: "teams")
         let text = renderMenu(source: source, engine: engine).joined(separator: "\n")
         try check(
-            text.contains("status: hifispeaker.fill questionmark.circle"),
+            text.contains("status: hifispeaker.fill questionmark.circle video"),
             "status line: \(text)"
         )
         try check(text.contains("  ✓ Jabra SPEAK 510 USB [hifispeaker.fill]"), "current speaker row")
@@ -535,6 +703,22 @@ func runUnitTests() {
         try check(
             text.contains("  - Current: Microsoft Teams Audio (not managed)"),
             "excluded info row"
+        )
+    }
+
+    run("menu text covers the camera target with its own block") {
+        let engine = try Fixtures.engine()
+        let source = Fixtures.overlay(output: "jabra510", input: "teams", camera: "obsvirtual")
+        let text = renderMenu(source: source, engine: engine).joined(separator: "\n")
+        try check(
+            text.contains("status: hifispeaker.fill questionmark.circle questionmark.circle"),
+            "three-slot status line: \(text)"
+        )
+        try check(text.contains("camera-menu:"), "camera block present")
+        try check(text.contains("  · Elgato Cam Link 4K [video]"), "camera tier row")
+        try check(
+            text.contains("  - Current: OBS Virtual Camera (not managed)"),
+            "excluded camera info row"
         )
     }
 }

@@ -18,8 +18,8 @@ enum CliFailure: Error, Sendable {
     case noDevice(String)
     /// Ambiguous device name; candidates are rendered as extra lines. No
     /// sysexits match — deliberate CLI-stable code (3), asserted by tests.
-    case ambiguous(direction: String, name: String, candidates: [AudioDevice])
-    /// A side effect failed (CoreAudio set). EX_SOFTWARE.
+    case ambiguous(target: String, name: String, candidates: [MediaDevice])
+    /// A side effect failed (device write). EX_SOFTWARE.
     case software(String)
 
     var exitCode: Int32 {
@@ -37,8 +37,8 @@ enum CliFailure: Error, Sendable {
         switch self {
         case .usage(let message), .dataInvalid(let message), .noDevice(let message), .software(let message):
             return ["[\(programName)] \(message)"]
-        case .ambiguous(let direction, let name, let candidates):
-            return ["[\(programName)] ambiguous '\(name)' for \(direction); candidates:"]
+        case .ambiguous(let target, let name, let candidates):
+            return ["[\(programName)] ambiguous '\(name)' for \(target); candidates:"]
                 + candidates.map { "  \($0.name)" }
         }
     }
@@ -56,23 +56,23 @@ struct Options: Sendable {
     let positional: [String]
 }
 
-/// Directions following a `[output|input]` positional: all of them when
-/// omitted, otherwise the one (validated) direction.
-func selectedDirections(_ options: Options) throws -> [Direction] {
-    guard options.positional.count > 1 else { return Direction.allCases }
-    guard let direction = Direction(rawValue: options.positional[1]) else {
-        throw CliFailure.usage("unknown direction '\(options.positional[1])'")
+/// Targets following a `[output|input|camera]` positional: all of them when
+/// omitted, otherwise the one (validated) target.
+func selectedTargets(_ options: Options) throws -> [Target] {
+    guard options.positional.count > 1 else { return Target.allCases }
+    guard let target = Target(rawValue: options.positional[1]) else {
+        throw CliFailure.usage("unknown target '\(options.positional[1])'")
     }
-    return [direction]
+    return [target]
 }
 
-/// The `[output|input] <tail…>` shape shared by `set`/`cycle`/`current`.
-func tailDirection(_ options: Options, usage: String) throws -> Direction {
+/// The `[output|input|camera] <tail…>` shape shared by `set`/`cycle`/`current`.
+func tailTarget(_ options: Options, usage: String) throws -> Target {
     guard options.positional.count >= 2 else { throw CliFailure.usage("usage: \(programName) \(usage)") }
-    guard let direction = Direction(rawValue: options.positional[1]) else {
-        throw CliFailure.usage("unknown direction '\(options.positional[1])'")
+    guard let target = Target(rawValue: options.positional[1]) else {
+        throw CliFailure.usage("unknown target '\(options.positional[1])'")
     }
-    return direction
+    return target
 }
 
 /// Real device writes are refused against a fixture table unless the caller
@@ -95,18 +95,18 @@ func requirePositionalArguments(_ options: Options, atMost: Int, usage: String) 
 
 enum DeviceNameMatch: Sendable {
     case notFound
-    case matched(AudioDevice)
-    case ambiguous([AudioDevice])
+    case matched(MediaDevice)
+    case ambiguous([MediaDevice])
 }
 
 /// Exact name first, then case-insensitive substring; ambiguity is data, not
 /// a silent first-pick.
 func resolveDevice(
-    _ direction: Direction,
+    _ target: Target,
     name: String,
-    devices: [AudioDevice]
+    devices: [MediaDevice]
 ) -> DeviceNameMatch {
-    let candidates = devices.filter { $0.isDirection(direction) }
+    let candidates = devices.filter { $0.supports(target) }
     let exact = candidates.filter { $0.name == name }
     switch exact.count {
     case 1: return .matched(exact[0])
@@ -124,10 +124,10 @@ func resolveDevice(
 // MARK: - Planned changes (pure)
 
 struct PlannedChange: Sendable {
-    let direction: Direction
+    let target: Target
     /// The device the priority list would select; `nil` when no tier matches.
-    let target: AudioDevice?
-    let current: AudioDevice?
+    let device: MediaDevice?
+    let current: MediaDevice?
     /// The current device is a synthetic (excluded) transport: auto-selection
     /// leaves it alone (only explicit user actions bypass this).
     let skippedExcluded: Bool
@@ -136,19 +136,19 @@ struct PlannedChange: Sendable {
 func planApply(
     source: DeviceSource,
     engine: PriorityEngine,
-    devices: [AudioDevice],
+    devices: [MediaDevice],
     force: Bool
 ) -> [PlannedChange] {
-    Direction.allCases.map { direction -> PlannedChange in
-        let current = source.defaultDevice(for: direction)
+    Target.allCases.map { target -> PlannedChange in
+        let current = source.defaultDevice(for: target)
         let skippedExcluded = !force && (current.map { !$0.isManaged } ?? false)
-        let target =
+        let device =
             skippedExcluded
             ? nil
-            : engine.targetDevice(direction, current: current, devices: devices)
+            : engine.targetDevice(target, current: current, devices: devices)
         return PlannedChange(
-            direction: direction,
             target: target,
+            device: device,
             current: current,
             skippedExcluded: skippedExcluded
         )
@@ -158,17 +158,17 @@ func planApply(
 /// Pure rendering of a plan: the caller decides where the lines go.
 func renderPlan(_ plan: [PlannedChange], dryRun: Bool) -> [String] {
     plan.map { change -> String in
-        let direction = change.direction.rawValue
+        let target = change.target.rawValue
         if change.skippedExcluded {
-            return "\(direction): skipped — current '\(change.current?.name ?? "?")' is not managed"
+            return "\(target): skipped — current '\(change.current?.name ?? "?")' is not managed"
         }
-        guard let target = change.target else {
-            return "\(direction): no priority device present — leaving '\(change.current?.name ?? "none")'"
+        guard let device = change.device else {
+            return "\(target): no priority device present — leaving '\(change.current?.name ?? "none")'"
         }
-        if change.current?.uid == target.uid {
-            return "\(direction): unchanged (\(target.name))"
+        if change.current?.uid == device.uid {
+            return "\(target): unchanged (\(device.name))"
         }
-        return dryRun ? "\(direction): would set to \(target.name)" : "\(direction): set to \(target.name)"
+        return dryRun ? "\(target): would set to \(device.name)" : "\(target): set to \(device.name)"
     }
 }
 
@@ -181,11 +181,11 @@ func performPlan(
 ) throws {
     guard !dryRun else { return }
     try plan.forEach { change in
-        guard let target = change.target, change.current?.uid != target.uid else { return }
-        let status = source.setDefault(target, direction: change.direction)
+        guard let device = change.device, change.current?.uid != device.uid else { return }
+        let status = source.setDefault(device, target: change.target)
         guard status == noErr else {
             throw CliFailure.software(
-                "failed to set \(change.direction.rawValue) to \(target.name): OSStatus \(status)"
+                "failed to set \(change.target.rawValue) to \(device.name): OSStatus \(status)"
             )
         }
     }
@@ -202,25 +202,30 @@ func runList(
     source: DeviceSource,
     engine: PriorityEngine
 ) throws -> CommandOutput {
-    try requirePositionalArguments(options, atMost: 2, usage: "list [output|input]")
+    try requirePositionalArguments(options, atMost: 2, usage: "list [output|input|camera]")
     let devices = source.allDevices()
-    let directions = try selectedDirections(options)
+    let targets = try selectedTargets(options)
 
     if options.json {
-        let sections = try directions.reduce(into: [String: [[String: Any]]]()) { sections, direction in
-            let currentUID = source.defaultDevice(for: direction)?.uid
+        let sections = try targets.reduce(into: [String: [[String: Any]]]()) { sections, target in
+            let currentUID = source.defaultDevice(for: target)?.uid
             let entries: [[String: Any]] =
                 devices
-                .filter { $0.isDirection(direction) }
+                .filter { $0.supports(target) }
                 .map { device in
-                    [
+                    var entry: [String: Any] = [
                         "name": device.name,
+                        "uid": device.uid,
                         "transport": device.transportClass.rawValue,
                         "excluded": !device.isManaged,
                         "current": device.uid == currentUID,
                     ]
+                    if let deviceType = device.deviceType {
+                        entry["deviceType"] = deviceType
+                    }
+                    return entry
                 }
-            sections[direction.rawValue] = entries
+            sections[target.rawValue] = entries
         }
         guard
             let data = try? JSONSerialization.data(
@@ -233,20 +238,20 @@ func runList(
         return CommandOutput(lines: [String(decoding: data, as: UTF8.self)])
     }
 
-    let blocks = directions.map { direction -> [String] in
-        let current = source.defaultDevice(for: direction)
-        let row = { (device: AudioDevice) -> String in
+    let blocks = targets.map { target -> [String] in
+        let current = source.defaultDevice(for: target)
+        let row = { (device: MediaDevice) -> String in
             let marker = current?.uid == device.uid ? "*" : " "
             let suffix = device.isManaged ? "" : " [\(device.transportClass.rawValue)]"
             return "\(marker) \(device.name)\(suffix)"
         }
-        let managed = engine.orderedManagedDevices(direction, devices: devices).map(row)
+        let managed = engine.orderedManagedDevices(target, devices: devices).map(row)
         let excluded =
             devices
-            .filter { $0.isDirection(direction) && !$0.isManaged }
+            .filter { $0.supports(target) && !$0.isManaged }
             .sorted { $0.name.compare($1.name, options: .caseInsensitive) == .orderedAscending }
             .map(row)
-        return ["\(direction.rawValue):"] + managed + excluded
+        return ["\(target.rawValue):"] + managed + excluded
     }
     return CommandOutput(lines: blocks.flatMap { $0 })
 }
@@ -255,17 +260,17 @@ func runCurrent(
     _ options: Options,
     source: DeviceSource
 ) throws -> CommandOutput {
-    try requirePositionalArguments(options, atMost: 2, usage: "current [output|input]")
-    let directions = try selectedDirections(options)
-    let lines: [String] = try directions.map { direction -> String in
-        let device = source.defaultDevice(for: direction)
+    try requirePositionalArguments(options, atMost: 2, usage: "current [output|input|camera]")
+    let targets = try selectedTargets(options)
+    let lines: [String] = try targets.map { target -> String in
+        let device = source.defaultDevice(for: target)
         if options.positional.count > 1 {
             guard let device = device else {
-                throw CliFailure.noDevice("no default \(direction.rawValue) device")
+                throw CliFailure.noDevice("no default \(target.rawValue) device")
             }
             return device.name
         }
-        return "\(direction.rawValue): \(device?.name ?? "none")"
+        return "\(target.rawValue): \(device?.name ?? "none")"
     }
     return CommandOutput(lines: lines)
 }
@@ -273,24 +278,24 @@ func runCurrent(
 /// Shared effect for `set <name>` and `set --tier`: one manual pick, with the
 /// usual already-set / dry-run reporting.
 private func applyDefaultDevice(
-    _ device: AudioDevice,
-    direction: Direction,
+    _ device: MediaDevice,
+    target: Target,
     source: DeviceSource,
     dryRun: Bool
 ) throws -> CommandOutput {
-    if source.defaultDevice(for: direction)?.uid == device.uid {
-        return CommandOutput(lines: ["\(direction.rawValue): already \(device.name)"])
+    if source.defaultDevice(for: target)?.uid == device.uid {
+        return CommandOutput(lines: ["\(target.rawValue): already \(device.name)"])
     }
     if dryRun {
-        return CommandOutput(lines: ["\(direction.rawValue): would set to \(device.name)"])
+        return CommandOutput(lines: ["\(target.rawValue): would set to \(device.name)"])
     }
-    let status = source.setDefault(device, direction: direction)
+    let status = source.setDefault(device, target: target)
     guard status == noErr else {
         throw CliFailure.software(
-            "failed to set \(direction.rawValue) to \(device.name): OSStatus \(status)"
+            "failed to set \(target.rawValue) to \(device.name): OSStatus \(status)"
         )
     }
-    return CommandOutput(lines: ["\(direction.rawValue): set to \(device.name)"])
+    return CommandOutput(lines: ["\(target.rawValue): set to \(device.name)"])
 }
 
 func runSet(
@@ -301,43 +306,43 @@ func runSet(
     try requireRealDeviceContext(options)
     if let tier = options.tier {
         guard options.positional.count == 2 else {
-            throw CliFailure.usage("usage: \(programName) set <output|input> --tier <title>")
+            throw CliFailure.usage("usage: \(programName) set <output|input|camera> --tier <title>")
         }
-        let direction = try tailDirection(options, usage: "set <output|input> --tier <title>")
+        let target = try tailTarget(options, usage: "set <output|input|camera> --tier <title>")
         switch engine.tierTarget(
-            direction,
+            target,
             title: tier,
-            current: source.defaultDevice(for: direction),
+            current: source.defaultDevice(for: target),
             devices: source.allDevices()
         ) {
         case .unknownTier:
             throw CliFailure.usage(
-                "unknown \(direction.rawValue) tier '\(tier)'; available: "
-                    + engine.tierTitles(direction).joined(separator: ", ")
+                "unknown \(target.rawValue) tier '\(tier)'; available: "
+                    + engine.tierTitles(target).joined(separator: ", ")
             )
         case .noDevice:
             throw CliFailure.noDevice(
-                "no connected \(direction.rawValue) device in tier '\(tier)'"
+                "no connected \(target.rawValue) device in tier '\(tier)'"
             )
         case .device(let device):
             return try applyDefaultDevice(
-                device, direction: direction, source: source, dryRun: options.dryRun
+                device, target: target, source: source, dryRun: options.dryRun
             )
         }
     }
     guard options.positional.count >= 3 else {
-        throw CliFailure.usage("usage: \(programName) set <output|input> <device name>")
+        throw CliFailure.usage("usage: \(programName) set <output|input|camera> <device name>")
     }
-    let direction = try tailDirection(options, usage: "set <output|input> <device name>")
+    let target = try tailTarget(options, usage: "set <output|input|camera> <device name>")
     let name = options.positional[2...].joined(separator: " ")
-    switch resolveDevice(direction, name: name, devices: source.allDevices()) {
+    switch resolveDevice(target, name: name, devices: source.allDevices()) {
     case .notFound:
-        throw CliFailure.noDevice("no \(direction.rawValue) device matching '\(name)'")
+        throw CliFailure.noDevice("no \(target.rawValue) device matching '\(name)'")
     case .ambiguous(let candidates):
-        throw CliFailure.ambiguous(direction: direction.rawValue, name: name, candidates: candidates)
+        throw CliFailure.ambiguous(target: target.rawValue, name: name, candidates: candidates)
     case .matched(let device):
         return try applyDefaultDevice(
-            device, direction: direction, source: source, dryRun: options.dryRun
+            device, target: target, source: source, dryRun: options.dryRun
         )
     }
 }
@@ -361,36 +366,35 @@ func runCycle(
     source: DeviceSource,
     engine: PriorityEngine
 ) throws -> CommandOutput {
-    try requirePositionalArguments(options, atMost: 2, usage: "cycle <output|input>")
+    try requirePositionalArguments(options, atMost: 2, usage: "cycle <output|input|camera>")
     try requireRealDeviceContext(options)
-    let direction = try tailDirection(options, usage: "cycle <output|input>")
+    let target = try tailTarget(options, usage: "cycle <output|input|camera>")
     let devices = source.allDevices()
-    let current = source.defaultDevice(for: direction)
-    guard let target = engine.cycleTarget(direction, current: current, devices: devices) else {
-        throw CliFailure.noDevice("no visible \(direction.rawValue) devices to cycle")
+    let current = source.defaultDevice(for: target)
+    guard let next = engine.cycleTarget(target, current: current, devices: devices) else {
+        throw CliFailure.noDevice("no visible \(target.rawValue) devices to cycle")
     }
-    if current?.uid == target.uid {
-        return CommandOutput(lines: ["\(direction.rawValue): unchanged (\(target.name))"])
+    if current?.uid == next.uid {
+        return CommandOutput(lines: ["\(target.rawValue): unchanged (\(next.name))"])
     }
     if options.dryRun {
-        return CommandOutput(lines: ["\(direction.rawValue): would cycle to \(target.name)"])
+        return CommandOutput(lines: ["\(target.rawValue): would cycle to \(next.name)"])
     }
-    let status = source.setDefault(target, direction: direction)
+    let status = source.setDefault(next, target: target)
     guard status == noErr else {
         throw CliFailure.software(
-            "failed to cycle \(direction.rawValue) to \(target.name): OSStatus \(status)"
+            "failed to cycle \(target.rawValue) to \(next.name): OSStatus \(status)"
         )
     }
-    return CommandOutput(lines: ["\(direction.rawValue): cycled to \(target.name)"])
+    return CommandOutput(lines: ["\(target.rawValue): cycled to \(next.name)"])
 }
 
 // MARK: - menu-text (deterministic rendering of the dropdown + status icons)
 
-/// The current menubar status line: two slot symbols.
+/// The current menubar status line: three slot symbols.
 func renderStatusLine(source: DeviceSource, engine: PriorityEngine) -> String {
-    let outSymbol = engine.slotSymbol(for: source.defaultDevice(for: .output), direction: .output)
-    let inSymbol = engine.slotSymbol(for: source.defaultDevice(for: .input), direction: .input)
-    return "status: \(outSymbol) \(inSymbol)"
+    let symbols = Target.allCases.map { engine.slotSymbol(for: source.defaultDevice(for: $0), target: $0) }
+    return "status: " + symbols.joined(separator: " ")
 }
 
 func renderMenu(
@@ -399,18 +403,18 @@ func renderMenu(
 ) -> [String] {
     let devices = source.allDevices()
     let statusLine = renderStatusLine(source: source, engine: engine)
-    let blocks: [String] = [(Direction.output, "speaker"), (Direction.input, "microphone")]
-        .flatMap { direction, title -> [String] in
-            var lines = ["\(title)-menu:"]
-            if let current = source.defaultDevice(for: direction), !current.isManaged {
+    let blocks: [String] = Target.allCases
+        .flatMap { target -> [String] in
+            var lines = ["\(target.menuLabel)-menu:"]
+            if let current = source.defaultDevice(for: target), !current.isManaged {
                 // Out-of-domain current device: the app deliberately does not
                 // touch it — say so instead of silently hiding it.
                 lines.append("  - Current: \(current.name) (not managed)")
             }
-            let rows: [String] = engine.orderedManagedDevices(direction, devices: devices)
+            let rows: [String] = engine.orderedManagedDevices(target, devices: devices)
                 .map { device in
-                    let check = source.defaultDevice(for: direction)?.uid == device.uid ? "✓" : "·"
-                    let symbol = engine.entrySymbol(for: device, direction: direction)
+                    let check = source.defaultDevice(for: target)?.uid == device.uid ? "✓" : "·"
+                    let symbol = engine.entrySymbol(for: device, target: target)
                     return "  \(check) \(device.name) [\(symbol)]"
                 }
             lines.append(contentsOf: rows)
@@ -438,7 +442,7 @@ func runCommand(
         return CommandOutput(lines: renderMenu(source: source, engine: engine))
     case "auto":
         // Hidden test seam: models the GUI's automatic path (list change →
-        // per-direction apply, respecting the excluded-current guard).
+        // per-target apply, respecting the excluded-current guard).
         try requirePositionalArguments(options, atMost: 1, usage: "auto")
         try requireRealDeviceContext(options)
         let devices = source.allDevices()

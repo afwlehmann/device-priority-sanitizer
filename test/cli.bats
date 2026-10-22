@@ -85,7 +85,7 @@ assert_output_is_not_empty_by_jq() {
 @test "menu-text: excluded current shows the not-managed glyph and info row" {
   run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-excluded-current.json" menu-text
   assert_success
-  assert_has_line "status: questionmark.circle questionmark.circle"
+  assert_has_line "status: questionmark.circle questionmark.circle video"
   assert_has_line "  - Current: Microsoft Teams Audio (not managed)"
 }
 
@@ -272,6 +272,111 @@ assert_output_is_not_empty_by_jq() {
 
 @test "unknown command exits EX_USAGE" {
   run $BIN "${FLAGS[@]}" frobnicate
+  assert_failure
+  assert_status 64
+}
+
+# ── Camera target ────────────────────────────────────────────────────────────
+# The camera fixtures pair the audio table from devices.json with four
+# cameras: an external capture card (managed, External tier), a Continuity
+# camera (managed, Continuity tier), the built-in FaceTime camera (managed,
+# Built-in tier), and an OBS virtual camera (synthetic, never auto-managed).
+
+CAMFLAGS=(--config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devices-cameras.json")
+
+@test "list camera orders tiers and tags the virtual camera" {
+  run $BIN "${CAMFLAGS[@]}" list camera
+  assert_success
+  assert_has_line "camera:"
+  assert_has_line "  Elgato Cam Link 4K"
+  assert_has_line "  iPhone Continuity Camera"
+  assert_has_line "* FaceTime HD Camera"
+  assert_has_line "  OBS Virtual Camera [virtual]"
+}
+
+@test "list --json camera emits uid, deviceType, and excluded flags" {
+  run $BIN "${CAMFLAGS[@]}" --json list camera
+  assert_success
+  local excluded current devicetype
+  excluded="$(jq -r '.camera[] | select(.name == "OBS Virtual Camera") | .excluded' <<<"$output")"
+  current="$(jq -r '.camera[] | select(.name == "FaceTime HD Camera") | .current' <<<"$output")"
+  devicetype="$(jq -r '.camera[] | select(.name == "FaceTime HD Camera") | .deviceType' <<<"$output")"
+  assert_equal "$excluded" "true"
+  assert_equal "$current" "true"
+  assert_equal "$devicetype" "AVCaptureDeviceTypeBuiltInWideAngleCamera"
+}
+
+@test "current camera prints the camera block only" {
+  run $BIN "${CAMFLAGS[@]}" current camera
+  assert_success
+  assert_output_is "FaceTime HD Camera"
+}
+
+@test "auto applies the external camera tier" {
+  run $BIN "${CAMFLAGS[@]}" --dry-run auto
+  assert_success
+  assert_has_line "camera: would set to Elgato Cam Link 4K"
+}
+
+@test "camera auto skips an excluded current camera" {
+  run $BIN --config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devices-cameras-virtual-current.json" --dry-run auto
+  assert_success
+  assert_has_line "camera: skipped — current 'OBS Virtual Camera' is not managed"
+}
+
+@test "set camera by name works with --dry-run" {
+  run $BIN "${CAMFLAGS[@]}" --dry-run set camera "iPhone Continuity Camera"
+  assert_success
+  assert_output_is "camera: would set to iPhone Continuity Camera"
+  # Setting the already-current camera is a no-op.
+  run $BIN "${CAMFLAGS[@]}" --dry-run set camera "FaceTime HD Camera"
+  assert_success
+  assert_output_is "camera: already FaceTime HD Camera"
+}
+
+@test "set camera --tier resolves within the chosen tier" {
+  run $BIN "${CAMFLAGS[@]}" --dry-run set camera --tier "Continuity"
+  assert_success
+  assert_output_is "camera: would set to iPhone Continuity Camera"
+  run $BIN "${CAMFLAGS[@]}" --dry-run set camera --tier "Nope"
+  assert_failure
+  assert_status 64
+  assert_line_matches "unknown camera tier 'Nope'; available: External, Continuity, Built-in"
+}
+
+@test "cycle camera wraps through the tier order" {
+  # Camera order: Elgato Cam Link 4K → iPhone Continuity Camera → FaceTime HD
+  # Camera (current, Built-in tier, last) → wraps to Elgato Cam Link 4K.
+  run $BIN "${CAMFLAGS[@]}" --dry-run cycle camera
+  assert_success
+  assert_output_is "camera: would cycle to Elgato Cam Link 4K"
+}
+
+@test "reapply covers the camera target" {
+  run $BIN --config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devices-cameras-virtual-current.json" --dry-run reapply
+  assert_success
+  assert_has_line "camera: would set to Elgato Cam Link 4K"
+}
+
+@test "menu-text renders the camera block with its own submenu" {
+  run $BIN "${CAMFLAGS[@]}" menu-text
+  assert_success
+  assert_has_line "status: headphones headphones laptopcomputer"
+  assert_has_line "camera-menu:"
+  assert_has_line "  · Elgato Cam Link 4K [video]"
+  assert_has_line "  · iPhone Continuity Camera [iphone]"
+  assert_has_line "  ✓ FaceTime HD Camera [laptopcomputer]"
+}
+
+@test "menu-text marks an excluded current camera" {
+  run $BIN --config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devices-cameras-virtual-current.json" menu-text
+  assert_success
+  assert_has_line "status: headphones headphones questionmark.circle"
+  assert_has_line "  - Current: OBS Virtual Camera (not managed)"
+}
+
+@test "fixture mode refuses real camera writes without --dry-run (EX_USAGE)" {
+  run $BIN "${CAMFLAGS[@]}" set camera "FaceTime HD Camera"
   assert_failure
   assert_status 64
 }

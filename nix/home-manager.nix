@@ -52,6 +52,11 @@ let
         type = lib.types.str;
         description = "SF Symbol for an unmatched current input device.";
       };
+      camera = lib.mkOption {
+        type = lib.types.str;
+        default = "video";
+        description = "SF Symbol for an unmatched current camera.";
+      };
     };
   };
 
@@ -59,6 +64,7 @@ let
     builtins.toJSON {
       outputs = cfg.outputs;
       inputs = cfg.inputs;
+      cameras = cfg.cameras;
       fallbackSymbol = cfg.fallbackSymbol;
       debounceMs = cfg.debounceMs;
       manageSoundEffects = cfg.manageSoundEffects;
@@ -89,35 +95,52 @@ let
   # build time (unlike the connected devices), so the argument data can be
   # generated here; the CLI resolves the chosen tier to a concrete device at
   # invocation time.
+  targetOptions = {
+    output = "outputs";
+    input = "inputs";
+    camera = "cameras";
+  };
+
+  targetLabels = {
+    output = "Output";
+    input = "Input";
+    camera = "Camera";
+  };
+
+  targetIcons = {
+    output = "🔊";
+    input = "🎙️";
+    camera = "🎥";
+  };
+
   tierSetScript =
-    direction:
+    target:
     let
-      isOutput = direction == "output";
-      entries = if isOutput then cfg.outputs else cfg.inputs;
-      label = if isOutput then "Output" else "Input";
-      icon = if isOutput then "🔊" else "🎙️";
+      entries = cfg.${targetOptions.${target}};
+      label = targetLabels.${target};
+      icon = targetIcons.${target};
       argument = builtins.toJSON {
         type = "dropdown";
-        placeholder = "Select ${direction} tier";
+        placeholder = "Select ${target} tier";
         data = map (entry: {
           title = entry.title;
           value = entry.title;
         }) entries;
       };
     in
-    pkgs.writeShellScript "device-priority-sanitizer-set-${direction}" ''
+    pkgs.writeShellScript "device-priority-sanitizer-set-${target}" ''
       # @raycast.schemaVersion 1
       # @raycast.title Device Priority: Set ${label}
       # @raycast.mode silent
       # @raycast.icon ${icon}
-      # @raycast.description Set the default ${direction} device to the best connected device in a configured tier.
+      # @raycast.description Set the default ${target} device to the best connected device in a configured tier.
       # @raycast.author Alexander Lehmann
       # @raycast.packageName Device Priority Sanitizer
       # @raycast.argument1 ${argument}
 
       set -euo pipefail
 
-      exec ${pkg}/bin/device-priority-sanitizer set ${direction} --tier "$1"
+      exec ${pkg}/bin/device-priority-sanitizer set ${target} --tier "$1"
     '';
 
   raycastCommands = [
@@ -125,23 +148,29 @@ let
       name = "device-priority-sanitizer-reapply";
       source = "${pkg}/bin/device-priority-sanitizer-reapply";
     }
-    {
-      name = "device-priority-sanitizer-cycle-output";
-      source = "${pkg}/bin/device-priority-sanitizer-cycle-output";
-    }
-    {
-      name = "device-priority-sanitizer-cycle-input";
-      source = "${pkg}/bin/device-priority-sanitizer-cycle-input";
-    }
-    {
-      name = "device-priority-sanitizer-set-output";
-      source = tierSetScript "output";
-    }
-    {
-      name = "device-priority-sanitizer-set-input";
-      source = tierSetScript "input";
-    }
-  ];
+  ]
+  ++ (map
+    (target: {
+      name = "device-priority-sanitizer-cycle-${target}";
+      source = "${pkg}/bin/device-priority-sanitizer-cycle-${target}";
+    })
+    ([
+      "output"
+      "input"
+      "camera"
+    ])
+  )
+  ++ (map
+    (target: {
+      name = "device-priority-sanitizer-set-${target}";
+      source = tierSetScript target;
+    })
+    ([
+      "output"
+      "input"
+      "camera"
+    ])
+  );
 
   # One-time migration from the audio-priority-sanitizer era: stops the old
   # launchd agent, removes its artifacts, and carries a *manual* (regular
@@ -224,11 +253,37 @@ in
       '';
     };
 
+    cameras = lib.mkOption {
+      type = lib.types.listOf entrySubmodule;
+      default = [
+        {
+          title = "Built-in";
+          match = "FaceTime";
+          symbol = "laptopcomputer";
+        }
+      ];
+      description = ''
+        Camera priority tiers, highest first. Writes the system-preferred
+        camera (`AVCaptureDevice.userPreferredCamera`); apps that follow the
+        system default pick it up, apps with their own pinned camera picker
+        (e.g. Zoom with an explicit camera selected) do not. Case-sensitive
+        regex matched against camera names; first entry with a matching
+        device wins. An empty list leaves the camera unmanaged.
+
+        The only camera ever used on this machine is the built-in
+        "FaceTime HD Camera" (verified via the AVFoundation unified log and
+        Webex media logs), so the default has a single Built-in tier; add
+        tiers for external cameras when they appear (`list camera` shows
+        names).
+      '';
+    };
+
     fallbackSymbol = lib.mkOption {
       type = fallbackSubmodule;
       default = {
         output = "speaker.wave.3";
         input = "mic";
+        camera = "video";
       };
       description = ''
         SF Symbols for a current device that matches no tier (but is not a
@@ -274,6 +329,12 @@ in
           && lib.all (entry: entry.title != "") cfg.inputs
           && lib.length (lib.unique (map (entry: entry.title) cfg.inputs)) == lib.length cfg.inputs;
         message = "services.device-priority-sanitizer.inputs must be non-empty with unique, non-empty `title` values (titles are the Raycast tier dropdown values).";
+      }
+      {
+        assertion =
+          lib.all (entry: entry.title != "") cfg.cameras
+          && lib.length (lib.unique (map (entry: entry.title) cfg.cameras)) == lib.length cfg.cameras;
+        message = "services.device-priority-sanitizer.cameras must have unique, non-empty `title` values (titles are the Raycast tier dropdown values); it may be empty to leave the camera unmanaged.";
       }
     ];
 

@@ -3,8 +3,8 @@ import Foundation
 
 final class ActionPayload: NSObject {
     enum Kind {
-        case select(Direction, AudioDevice)
-        case cycle(Direction)
+        case select(Target, MediaDevice)
+        case cycle(Target)
         case reapply
         case settings
     }
@@ -16,19 +16,19 @@ final class ActionPayload: NSObject {
     }
 }
 
-/// Owns the `NSStatusItem`: the two-symbol menubar image and the dropdown.
+/// Owns the `NSStatusItem`: the three-symbol menubar image and the dropdown.
 ///
-/// Menubar: [speaker slot][microphone slot], each an SF Symbol for the
-/// category of the current device of that direction. A synthetic (excluded)
-/// current device renders the dedicated "not managed" glyph — the app leaves
-/// it alone, but says so.
+/// Menubar: [speaker slot][microphone slot][camera slot], each an SF Symbol
+/// for the category of the current device of that target. A synthetic
+/// (excluded) current device renders the dedicated "not managed" glyph — the
+/// app leaves it alone, but says so.
 final class MenuController: NSObject {
     private let engine: PriorityEngine
     private let source: DeviceSource
     private let statusItem: NSStatusItem
 
-    var onSelect: ((Direction, AudioDevice) -> Void)?
-    var onCycle: ((Direction) -> Void)?
+    var onSelect: ((Target, MediaDevice) -> Void)?
+    var onCycle: ((Target) -> Void)?
     var onReapply: (() -> Void)?
 
     init(engine: PriorityEngine, source: DeviceSource) {
@@ -38,55 +38,49 @@ final class MenuController: NSObject {
         super.init()
     }
 
-    func update(devices: [AudioDevice]) {
-        let outDevice = source.defaultDevice(for: .output)
-        let inDevice = source.defaultDevice(for: .input)
-        let outSymbol = engine.slotSymbol(for: outDevice, direction: .output)
-        let inSymbol = engine.slotSymbol(for: inDevice, direction: .input)
+    func update(devices: [MediaDevice]) {
+        let currents = Target.allCases.map { ($0, source.defaultDevice(for: $0)) }
+        let symbols = currents.map { target, current in
+            (symbol: engine.slotSymbol(for: current, target: target), description: target.menuTitle)
+        }
 
-        if let image = Self.statusImage(outSymbol: outSymbol, inSymbol: inSymbol) {
+        if let image = Self.statusImage(symbols: symbols) {
             statusItem.button?.image = image
         }
         statusItem.button?.toolTip =
-            "Speaker: \(outDevice?.name ?? "none") · Microphone: \(inDevice?.name ?? "none")"
+            currents
+            .map { "\($0.0.menuTitle): \($0.1?.name ?? "none")" }
+            .joined(separator: " · ")
         statusItem.menu = buildMenu(devices: devices)
     }
 
     // MARK: - Status image
 
-    static func statusImage(outSymbol: String, inSymbol: String) -> NSImage? {
-        guard
-            let speaker = NSImage(systemSymbolName: outSymbol, accessibilityDescription: "Speaker"),
-            let microphone = NSImage(systemSymbolName: inSymbol, accessibilityDescription: "Microphone")
-        else { return nil }
+    static func statusImage(symbols: [(symbol: String, description: String)]) -> NSImage? {
+        let images = symbols.compactMap { symbol, description in
+            NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+        }
+        guard images.count == symbols.count, !images.isEmpty else { return nil }
         let gap: CGFloat = 3
-        let width = speaker.size.width + gap + microphone.size.width
-        let height = max(speaker.size.height, microphone.size.height)
+        let width = images.reduce(0) { $0 + $1.size.width } + gap * CGFloat(images.count - 1)
+        let height = images.map(\.size.height).max() ?? 0
         let image = NSImage(size: NSSize(width: width, height: height))
-        let microphoneRect = NSRect(
-            x: speaker.size.width + gap,
-            y: (height - microphone.size.height) / 2,
-            width: microphone.size.width,
-            height: microphone.size.height
-        )
         image.lockFocus()
-        speaker.draw(
-            in: NSRect(
-                x: 0,
-                y: (height - speaker.size.height) / 2,
-                width: speaker.size.width,
-                height: speaker.size.height
-            ),
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1
-        )
-        microphone.draw(
-            in: microphoneRect,
-            from: .zero,
-            operation: .sourceOver,
-            fraction: 1
-        )
+        var x: CGFloat = 0
+        for symbol in images {
+            symbol.draw(
+                in: NSRect(
+                    x: x,
+                    y: (height - symbol.size.height) / 2,
+                    width: symbol.size.width,
+                    height: symbol.size.height
+                ),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 1
+            )
+            x += symbol.size.width + gap
+        }
         image.unlockFocus()
         image.isTemplate = true
         return image
@@ -94,37 +88,34 @@ final class MenuController: NSObject {
 
     // MARK: - Menu
 
-    private func buildMenu(devices: [AudioDevice]) -> NSMenu {
+    private func buildMenu(devices: [MediaDevice]) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        [Direction.output, Direction.input]
-            .map { addDirectionSubmenu($0, to: menu, devices: devices) }
+        Target.allCases
+            .map { addTargetSubmenu($0, to: menu, devices: devices) }
             .forEach { menu.addItem($0) }
         menu.addItem(.separator())
-        menu.addItem(makeSubmenu("Cycle Speaker", payload: .cycle(.output)))
-        menu.addItem(makeSubmenu("Cycle Microphone", payload: .cycle(.input)))
+        Target.allCases.forEach { target in
+            menu.addItem(makeSubmenu("Cycle \(target.menuTitle)", payload: .cycle(target)))
+        }
         menu.addItem(.separator())
         menu.addItem(makeSubmenu("Reapply Priority", payload: .reapply))
         menu.addItem(makeSubmenu("Open Sound Settings", payload: .settings))
         return menu
     }
 
-    private func submenuTitle(_ direction: Direction) -> String {
-        direction == .output ? "Speaker" : "Microphone"
-    }
-
-    private func addDirectionSubmenu(
-        _ direction: Direction,
+    private func addTargetSubmenu(
+        _ target: Target,
         to menu: NSMenu,
-        devices: [AudioDevice]
+        devices: [MediaDevice]
     ) -> NSMenuItem {
-        let title = submenuTitle(direction)
+        let title = target.menuTitle
         let submenu = NSMenu(title: title)
-        let current = source.defaultDevice(for: direction)
+        let current = source.defaultDevice(for: target)
 
         // Out-of-domain current device: the app deliberately does not touch
         // it — say so instead of silently hiding it.
-        let managedDevices = engine.orderedManagedDevices(direction, devices: devices)
+        let managedDevices = engine.orderedManagedDevices(target, devices: devices)
         let infoItem: NSMenuItem? = current.flatMap { currentDevice in
             guard !currentDevice.isManaged else { return nil }
             let item = NSMenuItem(
@@ -141,7 +132,7 @@ final class MenuController: NSObject {
         }
 
         managedDevices
-            .map { device in makeDeviceItem(device, direction: direction, current: current) }
+            .map { device in makeDeviceItem(device, target: target, current: current) }
             .forEach { submenu.addItem($0) }
 
         let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -150,9 +141,9 @@ final class MenuController: NSObject {
     }
 
     private func makeDeviceItem(
-        _ device: AudioDevice,
-        direction: Direction,
-        current currentDevice: AudioDevice?
+        _ device: MediaDevice,
+        target: Target,
+        current currentDevice: MediaDevice?
     ) -> NSMenuItem {
         let line = NSMenuItem(
             title: device.name,
@@ -160,10 +151,10 @@ final class MenuController: NSObject {
             keyEquivalent: ""
         )
         line.target = self
-        let symbol = engine.entrySymbol(for: device, direction: direction)
+        let symbol = engine.entrySymbol(for: device, target: target)
         line.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         line.state = currentDevice?.uid == device.uid ? .on : .off
-        line.representedObject = ActionPayload(.select(direction, device))
+        line.representedObject = ActionPayload(.select(target, device))
         return line
     }
 
@@ -181,10 +172,10 @@ final class MenuController: NSObject {
     @objc private func handleMenuItem(_ sender: NSMenuItem) {
         guard let payload = sender.representedObject as? ActionPayload else { return }
         switch payload.kind {
-        case .select(let direction, let device):
-            onSelect?(direction, device)
-        case .cycle(let direction):
-            onCycle?(direction)
+        case .select(let target, let device):
+            onSelect?(target, device)
+        case .cycle(let target):
+            onCycle?(target)
         case .reapply:
             onReapply?()
         case .settings:

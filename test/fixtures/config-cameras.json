@@ -1,0 +1,20 @@
+{
+  "outputs": [
+    { "title": "Headset", "match": "Evolve|WH-1000|Rienok|EarPods", "symbol": "headphones" },
+    { "title": "Speaker", "match": "SPEAK 510", "symbol": "hifispeaker.fill" },
+    { "title": "Built-in", "match": "MacBook Pro Speakers|Built-in", "symbol": "laptopcomputer" }
+  ],
+  "inputs": [
+    { "title": "Headset", "match": "Evolve|WH-1000|Rienok|EarPods", "symbol": "headphones" },
+    { "title": "Speaker", "match": "SPEAK 510", "symbol": "hifispeaker.fill" },
+    { "title": "Built-in", "match": "MacBook Pro Microphone|Built-in", "symbol": "laptopcomputer" }
+  ],
+  "cameras": [
+    { "title": "External", "match": "Cam Link|Elgato|Brio|C920|C922|C930|Kiyo|USB Video|USB Camera", "symbol": "video" },
+    { "title": "Continuity", "match": "iPhone|Continuity Camera", "symbol": "iphone" },
+    { "title": "Built-in", "match": "FaceTime", "symbol": "laptopcomputer" }
+  ],
+  "fallbackSymbol": { "output": "speaker.wave.3", "input": "mic", "camera": "video" },
+  "debounceMs": 500,
+  "manageSoundEffects": true
+}
