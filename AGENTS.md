@@ -129,6 +129,13 @@ editor; symbols stay editable in the JSON.
   prompt; no autosave. Saving applies in-process when owned by the agent;
   a standalone window (`config` CLI) posts the `configChanged`
   distributed notification so the running agent reloads and applies.
+- **Offline tiers**: removing a priority row whose device is not currently
+  connected (drag-out or Remove) asks for confirmation — the removal would
+  otherwise be invisible, because the device cannot enter the Available
+  list until it is reconnected, and nothing could bring the tier back.
+  Connected devices remove instantly; they are reversible via the
+  Available list. The lists re-enumerate when the window becomes key, so
+  hotplugs appear without the Reload button.
 - **Data safety**: the document is a raw JSON object (`ConfigDocument`) —
   unknown top-level keys and unknown fields on existing tiers pass through
   untouched; only the three tier arrays are rewritten. Invalid config at

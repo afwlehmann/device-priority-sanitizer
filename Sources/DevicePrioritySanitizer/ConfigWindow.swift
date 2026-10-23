@@ -552,6 +552,31 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
         refresh()
     }
 
+    /// Removes a tier, guarding offline tiers with a confirmation. Removing
+    /// an offline tier is invisible afterwards — the device cannot enter
+    /// the Available list until it is reconnected — so the guard explains
+    /// the consequence before deleting. Connected devices stay instant:
+    /// their removal is reversible via the Available list.
+    private func removeTierInteractive(at index: Int, pane: TargetPane) -> Bool {
+        let rows = self.rows(for: pane.target)
+        guard index >= 0, index < rows.priority.count else { return false }
+        if rows.priority[index].connected.isEmpty {
+            let tier = rows.priority[index].tier
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Remove '\(tier.displayTitle)'?"
+            alert.informativeText =
+                "The device for this tier is not connected right now — removing the tier deletes it from the configuration. Reconnect the device to add it again."
+            alert.addButton(withTitle: "Remove")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() != .alertFirstButtonReturn { return false }
+        }
+        configDocument = configDocument.removeTier(target: pane.target, at: index)
+        markDirty()
+        refresh()
+        return true
+    }
+
     @objc private func removeSelectedTier(_ sender: Any?) {
         guard
             let button = sender as? NSButton,
@@ -559,10 +584,8 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
             editability.isEditable
         else { return }
         let row = pane.priorityTable.selectedRow
-        guard row >= 0, row < rows(for: pane.target).priority.count else { return }
-        configDocument = configDocument.removeTier(target: pane.target, at: row)
-        markDirty()
-        refresh()
+        guard row >= 0 else { return }
+        _ = removeTierInteractive(at: row, pane: pane)
     }
 
     // MARK: Window delegate
@@ -592,6 +615,13 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
         if editability.isEditable {
             ConfigLock.release(configPath: configDocument.path)
         }
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        // Refresh the device lists when the window is focused — the
+        // approved design's "refresh on activation". Unsaved edits are
+        // kept: only the devices are re-enumerated.
+        refresh()
     }
 
     func show() {
@@ -690,13 +720,11 @@ extension ConfigWindowController: NSTableViewDataSource, NSTableViewDelegate {
         else { return false }
         let rows = self.rows(for: pane.target)
 
-        // Dragging a priority row to the available list removes the tier.
+        // Dragging a priority row to the available list removes the tier
+        // (offline tiers confirm first — see removeTierInteractive).
         if tableView == pane.availableTable {
             guard case .tier(let index) = payload else { return false }
-            configDocument = configDocument.removeTier(target: pane.target, at: index)
-            markDirty()
-            refresh()
-            return true
+            return removeTierInteractive(at: index, pane: pane)
         }
 
         switch payload {
