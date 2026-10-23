@@ -428,6 +428,13 @@ final class LevelRowView: NSView {
     private static let buttonGap: CGFloat = 6
     /// Exactly spans Save + gap + Clear; the state label shares this width.
     private static let rightColumnWidth: CGFloat = saveWidth + buttonGap + clearWidth
+    /// The standard `NSMenu` item text gutter: regular items draw their
+    /// titles at this offset from the leading edge of a custom item view —
+    /// AppKit does NOT apply it to `NSMenuItem.view` content, so the row
+    /// must pad by it to line up with the other menu items. No public API
+    /// exposes the value; it is a measured constant, adjusted in this one
+    /// place if a macOS release changes the gutter.
+    private static let textInset: CGFloat = 16
 
     init(target: Target, state: LevelRowState, menuController: MenuController) {
         self.target = target
@@ -475,7 +482,7 @@ final class LevelRowView: NSView {
     /// (device name over the slider) fills the remainder. Recomputed on
     /// resize so a wider menu can never break the alignment.
     private func layoutFrames() {
-        let leftX: CGFloat = 6
+        let leftX = Self.textInset
         let rightX = bounds.width - Self.rightColumnWidth - 4
         let leftWidth = rightX - leftX - 2
         deviceLabel.frame = NSRect(x: leftX, y: 26, width: leftWidth, height: 14)
