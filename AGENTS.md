@@ -189,8 +189,11 @@ Jabra Evolve 75 SE                       restore     ← device + state label
   `NSMenuItem.view` content by the state/title gutter, so the row pads by
   AppKit's own title origin, derived at runtime from
   `NSMenuItemCell.titleRect(forBounds:)` (26 pt on current macOS: state
-  column + padding) — no hand-tuned constant; a macOS gutter change follows
-  along. `DPS_DEBUG_LAYOUT=1` logs the derived value at first menu build.
+  column + padding, counted from the item rect origin) minus the row view's
+  own x within the menu window — the metric and the view placement have
+  different origins. No hand-tuned constant; a macOS gutter change follows
+  along. `DPS_DEBUG_LAYOUT=1` logs the metric, the view frame, and the
+  effective inset at menu open.
 - **The stored value is visible on the slider**: the custom-drawn
   `LevelSliderControl` marks the saved position with a small accent tick on
   its track, so the bare `restore`/`do not restore` label stays unambiguous.

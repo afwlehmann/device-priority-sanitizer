@@ -428,12 +428,15 @@ final class LevelRowView: NSView {
     private static let buttonGap: CGFloat = 6
     /// Exactly spans Save + gap + Clear; the state label shares this width.
     private static let rightColumnWidth: CGFloat = saveWidth + buttonGap + clearWidth
-    /// AppKit's menu-item title origin: `NSMenuItem.view` content is NOT
-    /// inset by the state/title gutter that regular items draw, so the row
-    /// pads by the title origin itself. Derived from AppKit's public menu
-    /// item cell (`NSMenuItemCell.titleRect(forBounds:)`), not a tuned
-    /// constant — the representative item mirrors the main menu (state
-    /// column reserved, no image), so a macOS gutter change follows along.
+    /// AppKit's menu-item title origin, counted from the item rect origin:
+    /// `NSMenuItem.view` content is NOT inset by the state/title gutter that
+    /// regular items draw, so the row pads by the title origin itself.
+    /// Derived from AppKit's public menu item cell
+    /// (`NSMenuItemCell.titleRect(forBounds:)`), not a tuned constant — the
+    /// representative item mirrors the main menu (state column reserved, no
+    /// image), so a macOS gutter change follows along. `layoutFrames`
+    /// subtracts this view's own x within the menu window (the metric and
+    /// the view placement have different origins).
     private static let textInset: CGFloat = {
         let cell = NSMenuItemCell(textCell: "")
         let representative = NSMenuItem(title: "Representative", action: nil, keyEquivalent: "")
@@ -488,12 +491,39 @@ final class LevelRowView: NSView {
         layoutFrames()
     }
 
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        super.setFrameOrigin(newOrigin)
+        layoutFrames()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        layoutFrames()
+        if ProcessInfo.processInfo.environment["DPS_DEBUG_LAYOUT"] != nil, window != nil {
+            logStderr(
+                "debug layout: row frame=\(NSStringFromRect(frame)) "
+                    + "superview=\(NSStringFromRect(superview?.frame ?? .zero)) "
+                    + "metric=\(Self.textInset) effectiveLeft=\(max(0, Self.textInset - frame.minX))"
+            )
+        }
+    }
+
+    override func viewWillDraw() {
+        super.viewWillDraw()
+        // Safety net: if the menu places the view without going through the
+        // frame setters above, the geometry still converges before the
+        // first draw — the frame math is idempotent (equal rects are no-ops).
+        layoutFrames()
+    }
+
     /// One geometry pass shared by both rows: the right column (state label
     /// over Save/Clear) is pinned to the trailing edge, the left column
-    /// (device name over the slider) fills the remainder. Recomputed on
-    /// resize so a wider menu can never break the alignment.
+    /// (device name over the slider) fills the remainder. The left column
+    /// starts at the menu's title grid: the cell metric counts from the item
+    /// rect's origin, while this view sits at the menu's content origin, so
+    /// the view's own x within its superview is subtracted.
     private func layoutFrames() {
-        let leftX = Self.textInset
+        let leftX = max(0, Self.textInset - frame.minX)
         let rightX = bounds.width - Self.rightColumnWidth - 4
         let leftWidth = rightX - leftX - 2
         deviceLabel.frame = NSRect(x: leftX, y: 26, width: leftWidth, height: 14)
