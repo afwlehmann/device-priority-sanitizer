@@ -561,7 +561,9 @@ VOLFLAGS=(--config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-volu
   run $BIN "${VOLFLAGS[@]}" volume get output
   assert_failure
   assert_status 66
-  assert_has_line "Jabra SPEAK 510 USB has no output volume control"
+  # Failure lines render at the boundary with the program-name prefix
+  # (CliFailure.lines).
+  assert_has_line "[device-priority-sanitizer] Jabra SPEAK 510 USB has no output volume control"
 }
 
 @test "volume set updates the level; fixtures require --dry-run" {
