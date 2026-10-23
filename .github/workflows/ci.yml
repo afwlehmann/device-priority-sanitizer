@@ -35,7 +35,7 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
       - uses: DeterminateSystems/magic-nix-cache-action@v14
@@ -51,7 +51,7 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
       - uses: DeterminateSystems/magic-nix-cache-action@v14
@@ -63,7 +63,7 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
       - uses: DeterminateSystems/magic-nix-cache-action@v14
@@ -75,7 +75,7 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
       - uses: DeterminateSystems/magic-nix-cache-action@v14
