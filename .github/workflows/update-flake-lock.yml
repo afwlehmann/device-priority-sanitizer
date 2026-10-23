@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: DeterminateSystems/update-flake-lock@v26
+      - uses: DeterminateSystems/update-flake-lock@v29
         with:
           pr-title: "build: update flake.lock"
           pr-labels: |
