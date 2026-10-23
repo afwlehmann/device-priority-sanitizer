@@ -542,8 +542,53 @@ CAMFLAGS=(--config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devi
   assert_status 64
 }
 
+# ── Lifecycle (start/stop) ────────────────────────────────────────────────────
+# The menubar app IS the agent — start/stop control that one process. With the
+# HM LaunchAgent installed, KeepAlive resurrects plain exits, so stopping must
+# go through launchctl bootout. Every test drives fixture plists/app bundles
+# plus --dry-run, so the live agent on this machine is never touched (the
+# fixture label `bats.device-priority-sanitizer` is never loaded anywhere).
+
+@test "start plans a launchd bootstrap from the installed plist" {
+  run $BIN --launchd-plist "${FIXTURES}/agent.plist" --dry-run start
+  assert_success
+  assert_output_is "app: would start launchd agent bats.device-priority-sanitizer"
+}
+
+@test "stop reports not running when neither the job nor the app is up" {
+  run $BIN --launchd-plist "${FIXTURES}/agent.plist" --app-bundle "${FIXTURES}/TestApp.app" --dry-run stop
+  assert_success
+  assert_output_is "app: not running"
+}
+
+@test "start falls back to a manual launch when no plist exists" {
+  run $BIN --launchd-plist "${BATS_TEST_TMPDIR}/nonexistent.plist" --app-bundle "${FIXTURES}/TestApp.app" --dry-run start
+  assert_success
+  assert_line_matches "^app: would launch .*/TestApp\.app$"
+}
+
+@test "stop falls back to terminating a manual instance" {
+  # The fixture app's bundle id is never registered with LaunchServices, so
+  # the row reports "not running" — the terminate plan itself is covered by
+  # the unit tests (planAgent).
+  run $BIN --launchd-plist "${BATS_TEST_TMPDIR}/nonexistent.plist" --app-bundle "${FIXTURES}/TestApp.app" --dry-run stop
+  assert_success
+  assert_output_is "app: not running"
+}
+
+@test "start and stop reject trailing arguments" {
+  run $BIN --launchd-plist "${FIXTURES}/agent.plist" --dry-run start extra
+  assert_failure
+  assert_status 64
+  run $BIN --launchd-plist "${FIXTURES}/agent.plist" --dry-run stop extra
+  assert_failure
+  assert_status 64
+}
+
 @test "--help exits 0" {
   run $BIN --help
   assert_success
   assert_line_matches "^Usage: device-priority-sanitizer"
+  assert_has_line "  start                         Start the app (launchd agent when installed, else launch the bundle)"
+  assert_has_line "  stop                          Stop the app (boots out the launchd agent; manual instances terminate)"
 }

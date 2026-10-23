@@ -2,7 +2,7 @@ import Foundation
 
 let programName = "device-priority-sanitizer"
 
-let programVersion = "0.2.0"
+let programVersion = "0.3.0"
 
 func logStderr(_ message: String) {
     FileHandle.standardError.write(Data("[\(programName)] \(message)\n".utf8))
@@ -57,6 +57,11 @@ struct Options: Sendable {
     let configPath: String?
     let devicesPath: String?
     let statePath: String?
+    let levelsPath: String?
+    /// Test seam: explicit LaunchAgent plist for `start`/`stop`.
+    let launchdPlistPath: String?
+    /// Test seam: explicit app bundle for the manual start/stop path.
+    let appBundlePath: String?
     let dryRun: Bool
     let json: Bool
     let tier: String?

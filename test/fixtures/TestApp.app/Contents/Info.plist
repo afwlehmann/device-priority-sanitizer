@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>bats.device-priority-sanitizer.app</string>
+  <key>CFBundleName</key>
+  <string>Device Priority Sanitizer Test App</string>
+  <key>CFBundleExecutable</key>
+  <string>testapp</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+</dict>
+</plist>

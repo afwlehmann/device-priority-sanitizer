@@ -25,6 +25,8 @@ via plain `swiftc`.
 │ Camera.swift    AVFoundation │
 │ State.swift     runtime      │
 │                 state        │
+│ Agent.swift     start/stop,  │
+│                 quit, log    │
 │ Priority.swift  pure engine  │
 │ Command.swift   CLI commands │
 │ StatusMenu.swift NSStatusItem│
@@ -154,6 +156,47 @@ editor; symbols stay editable in the JSON.
   window only releases the lock. The AppKit UI is verified manually — no
   GUI automation under the nix sandbox; the pure model is unit-tested.
 
+## App lifecycle (start/stop, autostart, Quit, logging)
+
+The app **is** the agent — one binary, no separate service. Lifecycle control
+(`Agent.swift`) targets that one process and honors whichever supervisor
+owns it:
+
+- **launchd mode** (HM LaunchAgent installed, `autostart = true`): `KeepAlive`
+  resurrects any plain exit, so `stop` boots the job out
+  (`launchctl bootout gui/<uid>/<label>`) and `start` bootstraps the plist
+  back in. The agent plist is discovered by scanning
+  `~/Library/LaunchAgents/*.device-priority-sanitizer.plist`; the label is
+  read from the plist (HM derives it from the Nix `username` — never guessed).
+- **manual mode** (no plist — `autostart = false`, or a bare install):
+  `start` launches the `.app` via LaunchServices (`NSWorkspace`, resolved
+  from the CLI's own executable path) and `stop` terminates running
+  instances via `NSRunningApplication` (bundle id match, graceful terminate
+  with a 2 s poll).
+- `start`/`stop` are idempotent (`app: already running` / `app: not running`,
+  exit 0) and never load the tier config — a broken config must not block
+  stopping. `stop` is transient: the next login or `darwin-rebuild switch`
+  reloads the LaunchAgent; the persistent "off" is `disable` (prioritization
+  switch) or `autostart = false` (declarative).
+- **Quit** uses the same stop path (`stopAgentFromWithinApp`): bootout when
+  supervised, `NSApp.terminate` otherwise.
+- **Logging is app-owned** (`AgentLog`): GUI mode creates
+  `~/Library/Logs/device-priority-sanitizer/`, rotates `agent.log` →
+  `agent.log.1`, and redirects stdout+stderr before any config load — so
+  launchd, `start`, and manual launches all keep the same `agent.log`, and a
+  crash loop still rotates evidence per start. Two concurrent instances can
+  rotate each other's log (the survivor keeps writing through the renamed
+  inode); this is documented, not fixed.
+- `/bin/launchctl` is the only external binary (no nixpkgs package exists;
+  same precedent as the module's migration script).
+- Test seams: `--launchd-plist <path>` overrides plist discovery,
+  `--app-bundle <path>` overrides bundle resolution (fixtures:
+  `agent.plist` with the never-loaded label `bats.device-priority-sanitizer`,
+  `TestApp.app` with its own bundle id). With `--dry-run` the commands only
+  print the plan; inside the nix sandbox `/bin/launchctl` is unavailable and
+  `isJobLoaded` degrades to "not loaded". The pure planner
+  (`planAgent`) is unit-tested; the GUI Quit is manually verified.
+
 ## Symbols
 
 `symbol` values (tier entries, `fallbackSymbol`) are SF Symbol names —
@@ -238,6 +281,8 @@ device-priority-sanitizer cycle <output|input|camera>
 device-priority-sanitizer enable
 device-priority-sanitizer disable
 device-priority-sanitizer status [--json]
+device-priority-sanitizer start
+device-priority-sanitizer stop
 device-priority-sanitizer config [--config <path>] [--devices <fixture>] [--state <path>]
 device-priority-sanitizer menu-text        # test seam
 device-priority-sanitizer auto             # hidden test seam
@@ -287,12 +332,16 @@ device-priority-sanitizer auto             # hidden test seam
   execs the binary directly.
 - Consumed by `device-priority-sanitizer.nix` (root HM module): options
   `outputs`/`inputs`/`cameras` (`{ title, match, symbol }` tiers),
-  `fallbackSymbol` (incl. `camera`), `debounceMs`; writes
+  `fallbackSymbol` (incl. `camera`), `debounceMs`, and `autostart`
+  (default `true`). It writes
   `~/Library/Application Support/device-priority-sanitizer/config.json`
   (store path passed as argv so a rebuild restarts the agent with new
-  config), installs the CLI + Raycast commands, and runs the launchd agent
-  (`RunAtLoad` + `KeepAlive`, previous log rotated to `agent.log.1` on launch,
-  `~/Library/Logs/device-priority-sanitizer/agent.log`).
+  config), installs the CLI + Raycast commands, and — when `autostart` —
+  runs the launchd agent (`RunAtLoad` + `KeepAlive`). launchd runs the app
+  binary directly with `--config <store path>`; the old shell wrapper is
+  gone because the app owns `agent.log` itself (see App lifecycle). With
+  `autostart = false` an activation boots out a still-loaded job and removes
+  the plist — `device-priority-sanitizer start` launches the app on demand.
 - The Raycast `set-output`/`set-input`/`set-camera` commands are **generated
   in the root HM module**, not shipped by the package: their static tier
   dropdown must embed `cfg.outputs`/`cfg.inputs`/`cfg.cameras` titles

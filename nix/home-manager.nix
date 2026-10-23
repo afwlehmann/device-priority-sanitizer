@@ -73,25 +73,8 @@ let
     }
   );
 
-  logDir = "${config.home.homeDirectory}/Library/Logs/device-priority-sanitizer";
-
-  # Creates the log directory and rotates the previous run's log to
-  # agent.log.1 on every launch (including KeepAlive crash restarts), so
-  # a crash loop keeps its evidence while growth stays bounded. The app's stdio
-  # is redirected here rather than via launchd's StandardOutPath: launchd opens
-  # that file before exec'ing this wrapper, which would keep writing through
-  # the descriptor of the renamed inode. Then execs the app with the store-path
-  # config. The config is passed as `--config`: a bare positional argument
-  # would be parsed as a CLI command.
-  agentWrapper = pkgs.writeShellScript "device-priority-sanitizer-agent" ''
-    set -eu
-    ${pkgs.coreutils}/bin/mkdir -p "${logDir}"
-    if [ -f "${logDir}/agent.log" ]; then
-      ${pkgs.coreutils}/bin/mv -f "${logDir}/agent.log" "${logDir}/agent.log.1" || true
-    fi
-    exec "${pkg}/Applications/device-priority-sanitizer.app/Contents/MacOS/device-priority-sanitizer" \
-      --config "${configJson}" >>"${logDir}/agent.log" 2>&1
-  '';
+  # Shared by the launchd definition and the !autostart activation guard.
+  label = "${username}.device-priority-sanitizer";
 
   # Raycast script command with a static tier dropdown. The tiers are known at
   # build time (unlike the connected devices), so the argument data can be
@@ -203,6 +186,19 @@ in
 {
   options.services.device-priority-sanitizer = {
     enable = lib.mkEnableOption "the device priority sanitizer (menubar app, CLI, Raycast commands)";
+
+    autostart = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Install and load the launchd agent so the menubar app starts at
+        login and is kept alive (RunAtLoad + KeepAlive). When `false`, the
+        module still installs the CLI, the Raycast commands, and the config
+        symlink, but nothing is launched automatically — start the app on
+        demand with `device-priority-sanitizer start` (unsupervised), and
+        stop it with `stop` or the Quit menu item.
+      '';
+    };
 
     outputs = lib.mkOption {
       type = lib.types.listOf entrySubmodule;
@@ -360,14 +356,43 @@ in
       "writeBoundary"
     ] migration;
 
-    launchd.agents.device-priority-sanitizer = {
+    # autostart = false means *no* launchd presence: HM's home.file cleanup
+    # removes the plist, but nothing else stops an already running job — do
+    # that here, idempotently (same pattern as the migration above). With
+    # autostart enabled the entry is an empty no-op: the activation option
+    # must always carry a value (lib.mkIf would remove it).
+    home.activation.devicePrioritySanitizerAutostart =
+      lib.hm.dag.entryAfter
+        [
+          "writeBoundary"
+          "devicePrioritySanitizerMigration"
+        ]
+        (
+          lib.optionalString (!cfg.autostart) ''
+            if /bin/launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+              /bin/launchctl bootout "gui/$(id -u)/${label}" 2>/dev/null || true
+            fi
+            ${pkgs.coreutils}/bin/rm -f "${config.home.homeDirectory}/Library/LaunchAgents/${label}.plist"
+          ''
+        );
+
+    # The agent owns its log itself (directory creation, rotation to
+    # agent.log.1, stream redirection — see Agent.swift), so launchd runs the
+    # binary directly; the wrapper existed only for log plumbing. The store
+    # config path is passed as `--config`: a bare positional argument would be
+    # parsed as a CLI command.
+    launchd.agents.device-priority-sanitizer = lib.mkIf cfg.autostart {
       enable = true;
       config = {
         RunAtLoad = true;
         KeepAlive = true;
         ProcessType = "Background";
-        Label = "${username}.device-priority-sanitizer";
-        ProgramArguments = [ "${agentWrapper}" ];
+        Label = label;
+        ProgramArguments = [
+          "${pkg}/Applications/device-priority-sanitizer.app/Contents/MacOS/device-priority-sanitizer"
+          "--config"
+          "${configJson}"
+        ];
       };
     };
   };

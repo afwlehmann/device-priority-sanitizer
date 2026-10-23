@@ -40,6 +40,9 @@ func parseArguments(_ arguments: [String]) throws -> Options {
     var configPath: String?
     var devicesPath: String?
     var statePath: String?
+    var levelsPath: String?
+    var launchdPlistPath: String?
+    var appBundlePath: String?
     var dryRun = false
     var json = false
     var tier: String?
@@ -64,6 +67,21 @@ func parseArguments(_ arguments: [String]) throws -> Options {
                 throw CliFailure.usage("--state requires a path")
             }
             statePath = value
+        case "--levels":
+            guard let value = iterator.next() else {
+                throw CliFailure.usage("--levels requires a path")
+            }
+            levelsPath = value
+        case "--launchd-plist":
+            guard let value = iterator.next() else {
+                throw CliFailure.usage("--launchd-plist requires a path")
+            }
+            launchdPlistPath = value
+        case "--app-bundle":
+            guard let value = iterator.next() else {
+                throw CliFailure.usage("--app-bundle requires a path")
+            }
+            appBundlePath = value
         case "--tier":
             guard let value = iterator.next() else {
                 throw CliFailure.usage("--tier requires a title")
@@ -84,6 +102,9 @@ func parseArguments(_ arguments: [String]) throws -> Options {
         configPath: configPath,
         devicesPath: devicesPath,
         statePath: statePath,
+        levelsPath: levelsPath,
+        launchdPlistPath: launchdPlistPath,
+        appBundlePath: appBundlePath,
         dryRun: dryRun,
         json: json,
         tier: tier,
@@ -108,6 +129,8 @@ func printUsage() {
           enable                        Enable automatic prioritization
           disable                       Disable automatic prioritization
           status [--json]               Show the switch and per-target managed state
+          start                         Start the app (launchd agent when installed, else launch the bundle)
+          stop                          Stop the app (boots out the launchd agent; manual instances terminate)
           config                        Open the configuration window (AppKit)
           menu-text                     Print the dropdown as deterministic text (test seam)
 
@@ -115,6 +138,7 @@ func printUsage() {
           --config <path>    Config JSON (default: ~/Library/Application Support/device-priority-sanitizer/config.json)
           --devices <path>   Device table JSON fixture (headless test seam; writes require --dry-run)
           --state <path>     Runtime state JSON (default: ~/Library/Application Support/device-priority-sanitizer/state.json)
+          --levels <path>    Saved volume levels JSON (default: ~/Library/Application Support/device-priority-sanitizer/levels.json)
           --tier <title>     Tier for `set` (titles come from the configured tiers)
           --dry-run          Report intended changes without applying them
           --json             Machine-readable output for `list`
@@ -224,10 +248,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.openConfigWindow()
         }
         menuController.onQuit = {
-            // Terminates the process. Under the HM launchd agent KeepAlive
-            // immediately relaunches it; a manually launched instance
-            // exits for good.
-            _ = NSApp.terminate(nil)
+            // Boots out the launchd job when supervised — KeepAlive would
+            // resurrect a plain exit; manual instances terminate directly.
+            stopAgentFromWithinApp()
         }
 
         registerListeners()
@@ -584,6 +607,8 @@ func main() -> Never {
         // The prioritization switch is state-only: enable/disable never load
         // the tier config (a broken config must not prevent disabling), and
         // status reads the config leniently without compiling tier regexes.
+        // Lifecycle control needs neither config nor engine — stopping the
+        // app must always be possible.
         switch options.positional.first {
         case "enable":
             finish(try runPrioritizationSwitch(options, enabled: true))
@@ -591,11 +616,20 @@ func main() -> Never {
             finish(try runPrioritizationSwitch(options, enabled: false))
         case "status":
             finish(try runStatus(options))
+        case "start":
+            finish(try runAgentCommand(.start, options))
+        case "stop":
+            finish(try runAgentCommand(.stop, options))
         case "config":
             try requirePositionalArguments(options, atMost: 1, usage: "config")
             runConfigUI(options)
         default:
             break
+        }
+        // GUI mode owns agent.log from here on (rotation + stream redirect),
+        // so the config warnings below land in the log as well.
+        if options.positional.isEmpty {
+            setUpAgentLogging()
         }
         let context = try bootstrap(options)
         guard let command = options.positional.first else {

@@ -989,4 +989,170 @@ func runUnitTests() {
             "unmanaged info row: \(sparse)"
         )
     }
+
+    // MARK: Agent lifecycle (start/stop planning)
+
+    func withTempDirectory(_ body: (String) throws -> Void) throws {
+        let path = NSTemporaryDirectory() + "device-priority-test-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try body(path)
+    }
+
+    run("start plans a launchd bootstrap when the job is not loaded") {
+        let environment = AgentEnvironment(
+            plistPath: "/Library/LaunchAgents/x.plist", label: "x",
+            jobLoaded: false, appBundlePath: nil, appRunning: false
+        )
+        try expectEqual(
+            planAgent(command: .start, environment: environment),
+            .bootstrap(label: "x", plist: "/Library/LaunchAgents/x.plist"),
+            "bootstrap plan"
+        )
+    }
+
+    run("start treats a loaded job as already running, before any plist or bundle logic") {
+        let environment = AgentEnvironment(
+            plistPath: nil, label: nil, jobLoaded: true, appBundlePath: "/tmp/A.app", appRunning: true
+        )
+        try expectEqual(
+            planAgent(command: .start, environment: environment),
+            .alreadyRunning,
+            "the supervisor guarantees the process"
+        )
+    }
+
+    run("start falls back to a manual launch without a plist") {
+        let environment = AgentEnvironment(
+            plistPath: nil, label: nil, jobLoaded: false, appBundlePath: "/tmp/A.app", appRunning: false
+        )
+        try expectEqual(
+            planAgent(command: .start, environment: environment),
+            .launch(bundle: "/tmp/A.app"),
+            "manual launch plan"
+        )
+    }
+
+    run("start reports a running manual instance as already running") {
+        let environment = AgentEnvironment(
+            plistPath: nil, label: nil, jobLoaded: false, appBundlePath: "/tmp/A.app", appRunning: true
+        )
+        try expectEqual(
+            planAgent(command: .start, environment: environment),
+            .alreadyRunning,
+            "no double start"
+        )
+    }
+
+    run("start without any target is noTarget") {
+        let environment = AgentEnvironment(
+            plistPath: nil, label: nil, jobLoaded: false, appBundlePath: nil, appRunning: false
+        )
+        try expectEqual(
+            planAgent(command: .start, environment: environment),
+            .noTarget("no LaunchAgent installed and no app bundle found"),
+            "nothing to start"
+        )
+    }
+
+    run("stop plans a bootout for a loaded job, preferring the supervisor over the process") {
+        let environment = AgentEnvironment(
+            plistPath: "/p", label: "x", jobLoaded: true, appBundlePath: "/tmp/A.app", appRunning: true
+        )
+        try expectEqual(
+            planAgent(command: .stop, environment: environment),
+            .bootout(label: "x"),
+            "KeepAlive demands bootout, not a kill"
+        )
+    }
+
+    run("stop falls back to terminating a manual instance") {
+        let environment = AgentEnvironment(
+            plistPath: nil, label: nil, jobLoaded: false, appBundlePath: "/tmp/A.app", appRunning: true
+        )
+        try expectEqual(
+            planAgent(command: .stop, environment: environment),
+            .terminateApp,
+            "unsupervised terminate plan"
+        )
+    }
+
+    run("stop with nothing running is a no-op") {
+        let environment = AgentEnvironment(
+            plistPath: nil, label: nil, jobLoaded: false, appBundlePath: nil, appRunning: false
+        )
+        try expectEqual(
+            planAgent(command: .stop, environment: environment),
+            .notRunning,
+            "idempotent stop"
+        )
+    }
+
+    run("app bundle derivation covers the .app and package layouts") {
+        try expectEqual(
+            appBundlePath(executable: "/nix/store/x-Foo.app/Contents/MacOS/foo", override: nil),
+            "/nix/store/x-Foo.app",
+            "executable inside a bundle walks up"
+        )
+        try expectEqual(
+            appBundlePath(executable: "/nix/store/x/bin/device-priority-sanitizer", override: nil),
+            "/nix/store/x/Applications/device-priority-sanitizer.app",
+            "package CLI resolves the sibling Applications bundle"
+        )
+        try expectEqual(
+            appBundlePath(executable: "/usr/bin/somethingelse", override: nil),
+            nil,
+            "unrelated layout has no bundle"
+        )
+        try expectEqual(
+            appBundlePath(executable: "/usr/bin/somethingelse", override: "/nonexistent/A.app"),
+            nil,
+            "a missing override is no bundle"
+        )
+        try withTempDirectory { directory in
+            try expectEqual(
+                appBundlePath(executable: "/usr/bin/somethingelse", override: directory),
+                directory,
+                "an existing override wins"
+            )
+        }
+    }
+
+    run("plist label parsing reads the Label key and rejects garbage") {
+        let xml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0"><dict><key>Label</key><string>bats.device-priority-sanitizer</string></dict></plist>
+            """
+        try expectEqual(
+            plistLabel(Data(xml.utf8)),
+            "bats.device-priority-sanitizer",
+            "label decodes"
+        )
+        try expectEqual(plistLabel(Data("garbage".utf8)), nil, "garbage yields nil")
+    }
+
+    run("agent log rotation keeps the previous run as .1 and starts a fresh log") {
+        try withTempDirectory { directory in
+            let log = AgentLog(directory: directory)
+            try "first".write(toFile: log.path, atomically: true, encoding: .utf8)
+            log.rotate()
+            try expectEqual(
+                try String(contentsOfFile: log.previousPath, encoding: .utf8),
+                "first",
+                "first run rotates to .1"
+            )
+            try "second".write(toFile: log.path, atomically: true, encoding: .utf8)
+            log.rotate()
+            try expectEqual(
+                try String(contentsOfFile: log.previousPath, encoding: .utf8),
+                "second",
+                "an older .1 is replaced"
+            )
+            try check(
+                !FileManager.default.fileExists(atPath: log.path),
+                "rotation leaves no stale log behind"
+            )
+        }
+    }
 }

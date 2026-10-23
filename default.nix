@@ -6,7 +6,7 @@
 
 pkgs.stdenv.mkDerivation {
   pname = "device-priority-sanitizer";
-  version = "0.2.0";
+  version = "0.3.0";
 
   src = ./.;
 
