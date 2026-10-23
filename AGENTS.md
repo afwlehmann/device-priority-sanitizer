@@ -8,32 +8,32 @@ via plain `swiftc`.
 ## Architecture
 
 ```
-┌──────────────────────────────┐
-│ Sources/DevicePrioritySanitizer │
-│                              │
-│ Config.swift    config types │
-│ ConfigModel.swift raw-JSON   │
-│                 document for │
-│                 the config UI│
-│ ConfigWindow.swift AppKit    │
-│                 config window│
-│ MediaDevice.swift Target +   │
-│                 devices,     │
-│                 CoreAudio +  │
-│                 fixtures +   │
-│                 composite    │
-│ Camera.swift    AVFoundation │
-│ State.swift     runtime      │
-│                 state        │
-│ Levels.swift    saved volume │
-│                 levels       │
-│ Agent.swift     start/stop,  │
-│                 quit, log    │
-│ Priority.swift  pure engine  │
-│ Command.swift   CLI commands │
-│ StatusMenu.swift NSStatusItem│
-│ main.swift       bootstrap   │
-└──────────────────────────────┘
+┌───────────────────────────────────┐
+│ Sources/DevicePrioritySanitizer   │
+│                                   │
+│ Config.swift       config types   │
+│ ConfigModel.swift  raw-JSON       │
+│                    document for   │
+│                    the config UI  │
+│ ConfigWindow.swift AppKit         │
+│                    config window  │
+│ MediaDevice.swift  Target +       │
+│                    devices,       │
+│                    CoreAudio +    │
+│                    fixtures +     │
+│                    composite      │
+│ Camera.swift       AVFoundation   │
+│ State.swift        runtime        │
+│                    state          │
+│ Levels.swift       saved volume   │
+│                    levels         │
+│ Agent.swift        start/stop,    │
+│                    quit, log      │
+│ Priority.swift     pure engine    │
+│ Command.swift      CLI commands   │
+│ StatusMenu.swift   NSStatusItem   │
+│ main.swift         bootstrap      │
+└───────────────────────────────────┘
 ```
 
 - **Priority.swift is pure** — no I/O; everything takes values and returns
@@ -170,8 +170,8 @@ Between the device submenus and the Cycle items the dropdown carries two
 custom-view rows (output first, then input — same order as the submenus):
 
 ```
-Jabra SPEAK 510 USB           (out)         restore    ← name + suffix + state label
-[──────────────●──────────────]        Save    Clear    ← live slider + actions
+Jabra SPEAK 510 USB      (out)    restore                ← name + suffix + state
+[───────────●────────────────]       Save         Clear  ← slider + actions
 ```
 
 - **Line 1** names the *device* the controls act on (the current default of
