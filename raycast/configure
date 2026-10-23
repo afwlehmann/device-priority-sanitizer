@@ -1,0 +1,15 @@
+#!@bash@
+#
+# @raycast.schemaVersion 1
+# @raycast.title Device Priority: Configure
+# @raycast.mode silent
+# @raycast.icon ⚙️
+# @raycast.description Open the configuration window: drag devices between Available and Priority to manage the speaker, microphone, and camera ordering.
+# @raycast.author Alexander Lehmann
+# @raycast.packageName Device Priority Sanitizer
+
+set -euo pipefail
+shopt -s inherit_errexit
+# Note: errexit has exceptions inside if/&&/|| and pipelines — not used here.
+
+exec @cli@ config

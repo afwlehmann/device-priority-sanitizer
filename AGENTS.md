@@ -12,12 +12,19 @@ via plain `swiftc`.
 │ Sources/DevicePrioritySanitizer │
 │                              │
 │ Config.swift    config types │
+│ ConfigModel.swift raw-JSON   │
+│                 document for │
+│                 the config UI│
+│ ConfigWindow.swift AppKit    │
+│                 config window│
 │ MediaDevice.swift Target +   │
-│                 devices,    │
-│                 CoreAudio + │
-│                 fixtures +  │
-│                 composite   │
-│ Camera.swift    AVFoundation│
+│                 devices,     │
+│                 CoreAudio +  │
+│                 fixtures +   │
+│                 composite    │
+│ Camera.swift    AVFoundation │
+│ State.swift     runtime      │
+│                 state        │
 │ Priority.swift  pure engine  │
 │ Command.swift   CLI commands │
 │ StatusMenu.swift NSStatusItem│
@@ -94,6 +101,52 @@ via plain `swiftc`.
   key-value observable) refreshes the menu when another app changes the
   preferred camera.
 
+## Configuration window
+
+AppKit window (`ConfigWindow.swift`) over a pure model
+(`ConfigModel.swift`), opened from the menubar *Configure Devices…*, the
+`config` CLI command, or the Raycast `configure` script. Three tabs
+(Speaker / Microphone / Camera), each with:
+
+- **Available** (left): managed devices not covered by any tier,
+  lexicographic; identical names collapse into one row (a name tier matches
+  both anyway). Double-click appends.
+- **Priority** (right): tier rows in priority order; multi-device regex
+  tiers render grouped ("Headset — 2 devices" style subtitle), a tier
+  matching nothing shows "not connected". Drag to reorder, drag out or
+  Remove to drop the tier, drag a device in to manage it. An empty priority
+  list is the per-target "not auto-managed" switch — no other boolean.
+
+Adding a device writes `{title: unique name, match: "^escaped-name$",
+symbol: auto}` — anchored exact patterns (a name containing another
+device's name cannot capture it), deduplicated titles (`Name (2)`), symbols
+derived from transport (headphones / hifispeaker.fill / laptopcomputer /
+mic / iphone / video). v1 has no symbol picker, tier renaming, or regex
+editor; symbols stay editable in the JSON.
+
+- **Editing model**: explicit **Save** (atomic write + apply), **Revert**
+  (reload from disk), **Reload** (discarding-unsaved prompt), unsaved-close
+  prompt; no autosave. Saving applies in-process when owned by the agent;
+  a standalone window (`config` CLI) posts the `configChanged`
+  distributed notification so the running agent reloads and applies.
+- **Data safety**: the document is a raw JSON object (`ConfigDocument`) —
+  unknown top-level keys and unknown fields on existing tiers pass through
+  untouched; only the three tier arrays are rewritten. Invalid config at
+  open: alert + timestamped `config.json.invalid-<ts>` backup + "start
+  with empty" recovery; regexes are validated at load so a save always
+  yields an engine-compilable config.
+- **Read-only mode**: Home Manager's store symlink (resolved path under
+  `/nix/store` or non-writable) opens with a banner and disabled
+  edit/Save. A live advisory lock (`config.json.lock`, PID + stale
+  reclaim) makes a second writable editor read-only ("another
+  configuration window (PID …)"); the lock is released on window close.
+- **Banners**: a disabled global switch shows "Prioritization is disabled
+  globally" (the toggle stays menubar/CLI-only); the camera tab documents
+  "Apps must be set to System Default".
+- Standalone `config` quits after the last window closes; the agent-owned
+  window only releases the lock. The AppKit UI is verified manually — no
+  GUI automation under the nix sandbox; the pure model is unit-tested.
+
 ## Test seams
 
 - `--devices <file>` injects a `FixtureData` JSON table (see
@@ -147,6 +200,7 @@ device-priority-sanitizer cycle <output|input|camera>
 device-priority-sanitizer enable
 device-priority-sanitizer disable
 device-priority-sanitizer status [--json]
+device-priority-sanitizer config [--config <path>] [--devices <fixture>] [--state <path>]
 device-priority-sanitizer menu-text        # test seam
 device-priority-sanitizer auto             # hidden test seam
 ```
@@ -189,10 +243,10 @@ device-priority-sanitizer auto             # hidden test seam
 - `default.nix` — plain `swiftc -O` build (NOT SwiftPM, see above), minimal
   `.app` bundle (`Info.plist`, `LSUIElement`), Raycast wrappers with
   `@bash@`/`@cli@` placeholders (`reapply`, `cycle-output`, `cycle-input`,
-  `cycle-camera`). Signing relies on the nixpkgs darwin toolchain's ad-hoc
-  signature — no `/usr/bin/codesign` call (repo purity rule); the bundle
-  itself needs no signature because the launchd wrapper execs the binary
-  directly.
+  `cycle-camera`, `configure`). Signing relies on the nixpkgs darwin
+  toolchain's ad-hoc signature — no `/usr/bin/codesign` call (repo purity
+  rule); the bundle itself needs no signature because the launchd wrapper
+  execs the binary directly.
 - Consumed by `device-priority-sanitizer.nix` (root HM module): options
   `outputs`/`inputs`/`cameras` (`{ title, match, symbol }` tiers),
   `fallbackSymbol` (incl. `camera`), `debounceMs`; writes
@@ -205,4 +259,5 @@ device-priority-sanitizer auto             # hidden test seam
   in the root HM module**, not shipped by the package: their static tier
   dropdown must embed `cfg.outputs`/`cfg.inputs`/`cfg.cameras` titles
   (`title` is required and must be unique per target; the module asserts
-  this). They call `set <target> --tier "$1"`.
+  this). They call `set <target> --tier "$1"`. The `configure` command is
+  package-shipped (static; opens the config window via `config`).

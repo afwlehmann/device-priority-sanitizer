@@ -108,6 +108,7 @@ func printUsage() {
           enable                        Enable automatic prioritization
           disable                       Disable automatic prioritization
           status [--json]               Show the switch and per-target managed state
+          config                        Open the configuration window (AppKit)
           menu-text                     Print the dropdown as deterministic text (test seam)
 
         Flags:
@@ -132,15 +133,18 @@ func printUsage() {
 // MARK: - GUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let config: AppConfig
-    private let source: DeviceSource
-    private let engine: PriorityEngine
-    private let menuController: MenuController
+    private let options: Options
+    private let configPath: String
     private let statePath: String
+    private var config: AppConfig
+    private var source: DeviceSource
+    private var engine: PriorityEngine
+    private let menuController: MenuController
     private var prioritizationEnabled: Bool
     private var devices: [MediaDevice] = []
     private var previousSets: [Target: Set<String>] = [:]
     private var debounceTimer: Timer?
+    private var configWindow: ConfigWindowController?
     private struct RegisteredListener {
         let address: AudioObjectPropertyAddress
         let block: AudioObjectPropertyListenerBlock
@@ -149,10 +153,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var listeners: [RegisteredListener] = []
     private var cameraObservers: [NSObjectProtocol] = []
     private var stateObserver: NSObjectProtocol?
+    private var configObserver: NSObjectProtocol?
     /// Class-property KVO context for `AVCaptureDevice.systemPreferredCamera`.
     private var preferredCameraKVOContext = 0
 
-    init(config: AppConfig, source: DeviceSource, engine: PriorityEngine, statePath: String) {
+    init(
+        options: Options,
+        config: AppConfig,
+        source: DeviceSource,
+        engine: PriorityEngine,
+        statePath: String
+    ) {
+        self.options = options
+        self.configPath = options.configPath ?? defaultConfigPath()
         self.config = config
         self.source = source
         self.engine = engine
@@ -207,11 +220,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuController.onTogglePrioritization = { [weak self] in
             self?.togglePrioritization()
         }
+        menuController.onConfigure = { [weak self] in
+            self?.openConfigWindow()
+        }
 
         registerListeners()
         registerCameraObservers()
         registerStateObserver()
+        registerConfigObserver()
         reloadAndApply(initial: true)
+    }
+
+    // MARK: Configuration window
+
+    /// The menubar "Configure Devices…" window. Owned by the agent: closing
+    /// the window only releases the edit lock, never the agent.
+    private func openConfigWindow() {
+        if let configWindow {
+            configWindow.show()
+            return
+        }
+        let window = ConfigWindowController(
+            configPath: configPath,
+            statePath: statePath,
+            source: source,
+            standalone: false
+        ) { [weak self] newConfig in
+            self?.reloadConfiguration(newConfig)
+        }
+        if window.failedToOpen {
+            logStderr("configuration window could not open — see the alert")
+            return
+        }
+        configWindow = window
+        window.show()
+    }
+
+    /// Rebuilds engine + source from a (validated) config and re-applies. The
+    /// source is rebuilt via the original options so a fixture-injected agent
+    /// (`--devices`) keeps its seam; `manageSoundEffects` changes take
+    /// effect immediately.
+    private func reloadConfiguration(_ newConfig: AppConfig) {
+        do {
+            engine = try PriorityEngine(config: newConfig)
+            source = try makeSource(from: options, config: newConfig)
+            config = newConfig
+            menuController.update(engine: engine, source: source)
+            reloadAndApply(initial: true)
+        } catch {
+            logStderr("failed to apply the new configuration: \(error)")
+        }
+    }
+
+    /// A standalone config window saved: reload the config from disk (the
+    /// window holds no reference to this agent) and apply.
+    private func registerConfigObserver() {
+        configObserver = DistributedNotificationCenter.default().addObserver(
+            forName: configChangedNotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            do {
+                self.reloadConfiguration(try loadConfig(self.configPath))
+            } catch {
+                logStderr("config-changed reload failed: \(error)")
+            }
+        }
     }
 
     // MARK: Prioritization switch
@@ -404,6 +479,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 func runGUI(
+    options: Options,
     config: AppConfig,
     source: DeviceSource,
     engine: PriorityEngine,
@@ -411,11 +487,57 @@ func runGUI(
 ) -> Never {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
-    let delegate = AppDelegate(config: config, source: source, engine: engine, statePath: statePath)
+    let delegate = AppDelegate(
+        options: options, config: config, source: source, engine: engine, statePath: statePath
+    )
     app.delegate = delegate
     app.run()
     // NSApplication.run never returns on the GUI path; satisfy Never on all
     // paths for the type checker.
+    fatalError("unreachable")
+}
+
+// MARK: - Standalone configuration window (CLI `config`)
+
+/// Owns the NSApplication lifecycle of a `config` CLI invocation: the process
+/// quits when the (only) window closes, releasing the edit lock via the
+/// window delegate on the way out.
+final class ConfigStandaloneDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
+/// Runs the configuration window as its own accessory process. Device
+/// enumeration goes through the same source seam (fixtures work for
+/// screenshots); a save posts the config-changed notification so a running
+/// agent reloads — there is nothing to apply in this process.
+func runConfigUI(_ options: Options) -> Never {
+    let source: DeviceSource
+    do {
+        source = try makeSource(
+            from: options,
+            config: AppConfig(outputs: [], inputs: [], fallbackSymbol: nil, debounceMs: nil)
+        )
+    } catch let failure as CliFailure {
+        renderFailure(failure)
+    } catch {
+        logStderr("unexpected error: \(error)")
+        exit(EXIT_FAILURE)
+    }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let delegate = ConfigStandaloneDelegate()
+    app.delegate = delegate
+    let window = ConfigWindowController(
+        configPath: options.configPath ?? defaultConfigPath(),
+        statePath: options.statePath ?? defaultStatePath(),
+        source: source,
+        standalone: true,
+        onSaveApply: nil
+    )
+    window.show()
+    app.run()
     fatalError("unreachable")
 }
 
@@ -463,12 +585,16 @@ func main() -> Never {
             finish(try runPrioritizationSwitch(options, enabled: false))
         case "status":
             finish(try runStatus(options))
+        case "config":
+            try requirePositionalArguments(options, atMost: 1, usage: "config")
+            runConfigUI(options)
         default:
             break
         }
         let context = try bootstrap(options)
         guard let command = options.positional.first else {
             runGUI(
+                options: options,
                 config: context.config,
                 source: context.source,
                 engine: context.engine,

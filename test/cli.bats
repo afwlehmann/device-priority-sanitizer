@@ -533,6 +533,15 @@ CAMFLAGS=(--config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devi
   assert_status 64
 }
 
+@test "config rejects trailing arguments before opening the window" {
+  # The usage guard runs before any AppKit call, so this is testable
+  # headlessly; the window itself needs a GUI session and is verified
+  # manually (see AGENTS.md).
+  run $BIN config extra
+  assert_failure
+  assert_status 64
+}
+
 @test "--help exits 0" {
   run $BIN --help
   assert_success

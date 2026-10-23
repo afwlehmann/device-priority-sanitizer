@@ -7,6 +7,7 @@ final class ActionPayload: NSObject {
         case cycle(Target)
         case reapply
         case togglePrioritization
+        case configure
         case settings
     }
 
@@ -24,23 +25,33 @@ final class ActionPayload: NSObject {
 /// (excluded) current device renders the dedicated "not managed" glyph. A
 /// globally disabled switch appends `pause.circle` — the app leaves
 /// everything alone, but says so. The dropdown leads with a checkable
-/// Prioritization item (the master toggle) and greys out Reapply while
-/// disabled; manual device picks and Cycle remain available.
+/// Prioritization item (the master toggle), a Configure Devices… entry, and
+/// greys out Reapply while disabled; manual device picks and Cycle remain
+/// available. `update(engine:source:)` swaps the engine/source after a
+/// configuration save without recreating the status item.
 final class MenuController: NSObject {
-    private let engine: PriorityEngine
-    private let source: DeviceSource
+    private var engine: PriorityEngine
+    private var source: DeviceSource
     private let statusItem: NSStatusItem
 
     var onSelect: ((Target, MediaDevice) -> Void)?
     var onCycle: ((Target) -> Void)?
     var onReapply: (() -> Void)?
     var onTogglePrioritization: (() -> Void)?
+    var onConfigure: (() -> Void)?
 
     init(engine: PriorityEngine, source: DeviceSource) {
         self.engine = engine
         self.source = source
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
+    }
+
+    /// Hot-swaps the engine and source after a configuration save/reload —
+    /// the status item (and its menu) stay alive.
+    func update(engine: PriorityEngine, source: DeviceSource) {
+        self.engine = engine
+        self.source = source
     }
 
     func update(devices: [MediaDevice], prioritizationEnabled: Bool) {
@@ -123,6 +134,7 @@ final class MenuController: NSObject {
         // off it is greyed out instead of silently no-opping.
         reapply.isEnabled = prioritizationEnabled
         menu.addItem(reapply)
+        menu.addItem(makeSubmenu("Configure Devices…", payload: .configure))
         menu.addItem(makeSubmenu("Open Sound Settings", payload: .settings))
         return menu
     }
@@ -216,6 +228,8 @@ final class MenuController: NSObject {
             onReapply?()
         case .togglePrioritization:
             onTogglePrioritization?()
+        case .configure:
+            onConfigure?()
         case .settings:
             if let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") {
                 NSWorkspace.shared.open(url)

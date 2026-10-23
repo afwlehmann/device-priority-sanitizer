@@ -19,6 +19,11 @@ let defaultPrioritizationState = PrioritizationState(prioritizationEnabled: true
 /// an overridden path never pokes the live agent.
 let stateChangedNotificationName = Notification.Name("alex.device-priority-sanitizer.stateChanged")
 
+/// Distributed notification posted by a standalone configuration window
+/// (`config` CLI) after a save, so the running agent reloads and applies
+/// the new config. The agent's own window applies in-process instead.
+let configChangedNotificationName = Notification.Name("alex.device-priority-sanitizer.configChanged")
+
 func defaultStatePath() -> String {
     if let envPath = ProcessInfo.processInfo.environment["DEVICE_PRIORITY_SANITIZER_STATE"] {
         return envPath

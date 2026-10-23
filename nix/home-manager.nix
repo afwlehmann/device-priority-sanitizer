@@ -154,6 +154,10 @@ let
       name = "device-priority-sanitizer-reapply";
       source = "${pkg}/bin/device-priority-sanitizer-reapply";
     }
+    {
+      name = "device-priority-sanitizer-configure";
+      source = "${pkg}/bin/device-priority-sanitizer-configure";
+    }
   ]
   ++ (map (target: {
     name = "device-priority-sanitizer-cycle-${target}";

@@ -758,6 +758,179 @@ func runUnitTests() {
             "unmanaged rendering: \(text)")
     }
 
+    // MARK: Config document (UI model)
+
+    func withTempConfig(_ json: String, _ body: (String) throws -> Void) throws {
+        let path = NSTemporaryDirectory() + "device-priority-test-\(UUID().uuidString).json"
+        try json.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try body(path)
+    }
+
+    run("exactPattern anchors and escapes device names") {
+        try expectEqual(exactPattern("Jabra SPEAK 510"), "^Jabra SPEAK 510$", "plain name")
+        try expectEqual(
+            exactPattern("Jabra SPEAK 510 USB (Stereo)"),
+            "^Jabra SPEAK 510 USB \\(Stereo\\)$",
+            "parens are regex-escaped and the pattern is anchored"
+        )
+        try expectEqual(exactPattern("C920 [HD]"), "^C920 \\[HD]$", "brackets escaped (] needs no escape)")
+    }
+
+    run("uniqueTitle deduplicates against existing titles") {
+        try expectEqual(uniqueTitle("Cam", existing: []), "Cam", "first title is untouched")
+        try expectEqual(uniqueTitle("Cam", existing: ["Cam"]), "Cam (2)", "second gets a suffix")
+        try expectEqual(
+            uniqueTitle("Cam", existing: ["Cam", "Cam (2)"]),
+            "Cam (3)",
+            "third continues the sequence"
+        )
+    }
+
+    run("autoSymbol derives from transport and target") {
+        let devices = Fixtures.devices()
+        let evolve = devices.first { $0.uid == "evolve" }!
+        let dell = devices.first { $0.uid == "dell" }!
+        let facetime = devices.first { $0.uid == "facetime" }!
+        let camlink = devices.first { $0.uid == "camlink" }!
+        try expectEqual(autoSymbol(evolve, .output), "headphones", "bluetooth output")
+        try expectEqual(autoSymbol(evolve, .input), "headphones", "bluetooth input")
+        try expectEqual(autoSymbol(dell, .output), "display", "displayPort output")
+        try expectEqual(autoSymbol(facetime, .camera), "laptopcomputer", "built-in camera")
+        try expectEqual(autoSymbol(camlink, .camera), "video", "external camera")
+    }
+
+    run("document rows split covered, uncovered, and unmanaged devices") {
+        let document = ConfigDocument(
+            path: "/dev/null",
+            raw: [
+                "outputs": [
+                    ["match": "Evolve", "symbol": "headphones", "title": "Headset"]
+                ],
+                "cameras": [],
+            ]
+        )
+        let rows = document.rows(for: .output, devices: Fixtures.devices())
+        try expectEqual(rows.priority.count, 1, "one output tier")
+        try expectEqual(rows.priority.first?.tier.title, "Headset", "tier title")
+        try expectEqual(rows.priority.first?.connected.map(\.uid), ["evolve"], "tier's device")
+        // Available: managed outputs, uncovered (SPEAK 510 tier absent),
+        // lexicographic, duplicates collapsed.
+        try expectEqual(
+            rows.available.map(\.name),
+            ["DELL U3824DW", "Jabra SPEAK 510 USB", "MacBook Pro Speakers"],
+            "uncovered outputs in lexicographic order"
+        )
+        try check(rows.isManaged, "output is managed")
+        let cameraRows = document.rows(for: .camera, devices: Fixtures.devices())
+        try check(cameraRows.priority.isEmpty && !cameraRows.isManaged, "camera unmanaged")
+        try expectEqual(cameraRows.available.count, 3, "cameras available (virtual excluded)")
+    }
+
+    run("document rows collapse identical device names in the available list") {
+        let document = ConfigDocument(path: "/dev/null", raw: [:] as [String: Any])
+        let twin = MediaDevice(
+            uid: "evolve-twin", name: "Jabra Evolve 75 SE", transportClass: .bluetooth,
+            deviceType: nil, capabilities: [.output, .input]
+        )
+        let rows = document.rows(for: .output, devices: Fixtures.devices() + [twin])
+        try expectEqual(
+            rows.available.filter { $0.name == "Jabra Evolve 75 SE" }.count, 1,
+            "same-name devices collapse into one available row"
+        )
+    }
+
+    run("insert adds an anchored tier with deduped title; remove and move are pure") {
+        let document = ConfigDocument(
+            path: "/dev/null",
+            raw: ["cameras": [["match": "FaceTime", "symbol": "laptopcomputer", "title": "FaceTime HD Camera"]]]
+        )
+        let devices = Fixtures.devices()
+        let facetime = devices.first { $0.uid == "facetime" }!
+        let camlink = devices.first { $0.uid == "camlink" }!
+
+        let inserted = document.insert(device: facetime, target: .camera, at: 0)
+        try expectEqual(
+            inserted.tiers(for: .camera).map(\.title),
+            ["FaceTime HD Camera (2)", "FaceTime HD Camera"],
+            "duplicate title gets a suffix; insertion at the top"
+        )
+        try expectEqual(inserted.tiers(for: .camera).first?.match, "^FaceTime HD Camera$", "anchored exact pattern")
+
+        let removed = document.removeTier(target: .camera, at: 0)
+        try check(removed.tiers(for: .camera).isEmpty, "removal empties the target")
+
+        let multi = document.insert(device: camlink, target: .camera, at: 0)
+        let moved = multi.moveTier(target: .camera, from: 1, to: 0)
+        try expectEqual(
+            moved.tiers(for: .camera).map(\.title),
+            ["FaceTime HD Camera", "Elgato Cam Link 4K"],
+            "move promotes the lower tier"
+        )
+    }
+
+    run("document load/save preserves unknown keys and unknown tier fields") {
+        try withTempConfig(
+            #"""
+            {"outputs": [{"match": "Evolve", "symbol": "headphones", "title": "Headset",
+                          "note": "keep me"}],
+             "inputs": [],
+             "unknownTopLevel": {"a": 1}}
+            """#
+        ) { path in
+            var document = try ConfigDocument.load(path)
+            try check(document.tiers(for: .output).count == 1, "one tier loads")
+            let camlink = Fixtures.devices().first { $0.uid == "camlink" }!
+            document = document.insert(device: camlink, target: .camera, at: 0)
+
+            let data = try document.encoded()
+            let raw = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            try check(
+                (raw["unknownTopLevel"] as? [String: Any])?["a"] as? Int == 1,
+                "unknown top-level key survives"
+            )
+            let outputs = raw["outputs"] as! [[String: Any]]
+            try expectEqual(outputs.first?["note"] as? String, "keep me", "unknown tier field survives")
+            let cameras = raw["cameras"] as! [[String: Any]]
+            try expectEqual(
+                cameras.first?["match"] as? String, "^Elgato Cam Link 4K$",
+                "new tier carries the anchored pattern"
+            )
+
+            // The typed view decodes what the engine needs.
+            let config = try JSONDecoder().decode(AppConfig.self, from: data)
+            try expectEqual(config.outputs.first?.title, "Headset", "typed config decodes")
+            try expectEqual(config.entries(for: .camera).count, 1, "camera tier decodes")
+        }
+    }
+
+    run("document load/save round-trips through the file and backs up broken files") {
+        try withTempConfig(#"{"outputs": [], "inputs": []}"#) { path in
+            var document = try ConfigDocument.load(path)
+            let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+            document = document.insert(device: evolve, target: .output, at: 0)
+            try document.save()
+            let reloaded = try ConfigDocument.load(path)
+            try expectEqual(
+                reloaded.tiers(for: .output).map(\.title), ["Jabra Evolve 75 SE"],
+                "tier persists across save/load"
+            )
+        }
+        try withTempConfig("garbage") { path in
+            do {
+                _ = try ConfigDocument.load(path)
+                throw UnitTestFailure("garbage must fail validation")
+            } catch let error as ConfigDocumentError {
+                guard case .invalidJSON = error else {
+                    throw UnitTestFailure("expected invalidJSON, got \(error)")
+                }
+            }
+            let empty = ConfigDocument.empty(path: path)
+            let backupPath = try empty.backup()
+            try check(FileManager.default.fileExists(atPath: backupPath), "backup created")
+        }
+    }
+
     // MARK: Menu rendering (deterministic)
 
     run("menu text lists tier order with checkmark and excluded info row") {
