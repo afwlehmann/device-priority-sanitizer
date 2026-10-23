@@ -50,6 +50,19 @@ via plain `swiftc`.
 - **Failures are typed**: `CliFailure` enumerates the expected CLI failures
   and carries the sysexits exit code + stderr lines as *data*. Only the
   boundary (`main()`) renders and exits — no `exit()` inside logic.
+- **Functional style — the Swift elaboration of the repo-wide FP baseline**:
+  `throws` with a typed error enum *is* this codebase's result type — failure
+  travels as data (`CliFailure`) and is rendered at exactly one boundary.
+  Struct `mutating` on *local* values (copy + `upsert`/`remove`) and local
+  `var` accumulators are accepted Swift value semantics; the enforced rule is
+  *no shared-state mutation*, not "no local var". Mutation is confined to
+  three zones: the UI layer (views are dumb renderers fed `LevelRowState` and
+  callbacks — never policy), the device-source seams (CoreAudio/AVFoundation
+  FFI, recording fixtures), and the `main()` boundary. Everything else stays
+  pure: values in, values out — that is what lets the unit suite run without
+  hardware. Logging is an observable effect: warning logs belong to the
+  boundary or the effects layer; the two loader degradations (`resolveState`,
+  `loadLevelsDocument`) are documented, deliberate exceptions.
 - **Auto-selection semantics** (see root [AGENTS.md](../../AGENTS.md)):
   - Applied only on a per-target device-*set* change (output, input, and
     camera are fully independent).
