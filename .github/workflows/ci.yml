@@ -15,50 +15,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
+  check:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
-      - name: Evaluate the flake
-        run: nix flake check --no-build
-      - name: pre-commit hooks (nixfmt, shellcheck, shfmt)
-        run: nix develop -c pre-commit run --all-files
-      - name: swift-format gate
-        run: nix develop -c nix build .#checks.aarch64-darwin.format --print-build-logs
-
-  build:
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
-      - name: Build the package
-        run: nix develop -c nix build .#default --print-build-logs
-
-  unit-tests:
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
-      - name: Unit tests
-        run: nix develop -c nix build .#checks.aarch64-darwin.unit --print-build-logs
-
-  cli-tests:
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v7
-      - uses: DeterminateSystems/nix-installer-action@v23
-        with:
-          flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
-      - name: CLI integration tests
-        run: nix develop -c nix build .#checks.aarch64-darwin.cli --print-build-logs
+      - name: Build and test
+        run: nix flake check --print-build-logs --keep-going

@@ -499,8 +499,8 @@ device-priority-sanitizer auto             # hidden test seam
   `format`, and the pre-commit check) and `nix build .#default`. Quick
   evaluation-only pass: `nix flake check --no-build`.
 - CI (`.github/workflows/ci.yml`): macOS Tahoe runner (`macos-26`), Nix via
-  DeterminateSystems installer + magic-nix-cache, runs `nix flake check` on
-  push/PR/tags.
+  DeterminateSystems installer, one job running `nix flake check` (covers
+  the package, unit/CLI tests, swift-format, and pre-commit) on push/PR/tags.
 - Release process: bump the version in exactly two places
   (`Sources/DevicePrioritySanitizer/Command.swift` `programVersion` and
   `Info.plist` `CFBundleShortVersionString`; the nix package reads its
