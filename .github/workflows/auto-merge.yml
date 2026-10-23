@@ -1,0 +1,25 @@
+name: Auto-merge dependency PRs
+
+# Enables auto-merge (rebase, per the repo's merge settings) on dependency
+# PRs: Dependabot's GitHub Actions bumps and the weekly flake.lock update
+# PR (labeled `flake-update` by update-flake-lock). The PR merges once CI
+# is green.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' ||
+      contains(github.event.pull_request.labels.*.name, 'flake-update')
+    steps:
+      - name: Enable auto-merge
+        run: gh pr merge --auto --rebase "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

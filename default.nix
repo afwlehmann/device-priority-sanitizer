@@ -6,9 +6,18 @@
 
 pkgs.stdenv.mkDerivation {
   pname = "device-priority-sanitizer";
-  version = "0.5.0";
+  version = "0.6.0";
 
-  src = ./.;
+  # Focused source: only what the build consumes — tests and docs live in the
+  # repo but must not change the package hash.
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./Sources
+      ./raycast
+      ./Info.plist
+    ];
+  };
 
   strictDeps = true;
 
@@ -52,6 +61,7 @@ pkgs.stdenv.mkDerivation {
 
   meta = with lib; {
     description = "macOS device priority sanitizer with menubar UI and CLI";
+    homepage = "https://github.com/afwlehmann/device-priority-sanitizer";
     license = licenses.mit;
     platforms = platforms.darwin;
     mainProgram = "device-priority-sanitizer";

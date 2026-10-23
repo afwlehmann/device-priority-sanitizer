@@ -63,7 +63,7 @@ via plain `swiftc`.
   hardware. Logging is an observable effect: warning logs belong to the
   boundary or the effects layer; the two loader degradations (`resolveState`,
   `loadLevelsDocument`) are documented, deliberate exceptions.
-- **Auto-selection semantics** (see root [AGENTS.md](../../AGENTS.md)):
+- **Auto-selection semantics** (see the full rules below):
   - Applied only on a per-target device-*set* change (output, input, and
     camera are fully independent).
   - Applied once at agent start (login/reboot); this is the deliberate
@@ -382,18 +382,17 @@ current) and `pause.circle` (disabled switch).
   toolchain cannot resolve — cc-wrapper target mismatch). The harness is a
   ~60-line assertion runner (`Harness.swift`) with `ok -`/`not ok -` TAP-ish
   output; test cases live in `UnitTests.swift`, wired in
-  `Tests/.../main.swift`. Flake check: `checks.device-priority-sanitizer-unit`.
+  `Tests/.../main.swift`. Flake check: `checks.unit`.
 - **CLI integration tests** (`test/cli.bats`): drive the built binary
   headlessly against the device fixtures (`--devices` + `--dry-run`), one
   bats test per behavior; exit codes asserted against sysexits
   (64 EX_USAGE, 65 EX_DATAERR, 66 EX_NOINPUT, 3 ambiguous, 70 EX_SOFTWARE).
   The camera fixtures (`config-cameras.json`, `devices-cameras*.json`) pair
   the full audio table with four cameras (external, Continuity, built-in,
-  virtual) and three camera tiers. Flake check:
-  `checks.device-priority-sanitizer-cli`.
-- **Format**: `checks.device-priority-sanitizer-format` verifies the Swift
+  virtual) and three camera tiers. Flake check: `checks.cli`.
+- **Format**: `checks.format` verifies the Swift
   sources are a fixed point of `swift-format` (4-space indent / 120 cols via
-  `.swift-format`; same gate as nixfmt/ruff-format in this repo).
+  `.swift-format`; same gate as nixfmt for the Nix files).
 
 ## CLI
 
@@ -457,14 +456,17 @@ device-priority-sanitizer auto             # hidden test seam
 - `default.nix` — plain `swiftc -O` build (NOT SwiftPM, see above), minimal
   `.app` bundle (`Info.plist`, `LSUIElement`), Raycast wrappers with
   `@bash@`/`@cli@` placeholders (`reapply`, `cycle-output`, `cycle-input`,
-  `cycle-camera`, `configure`). Signing relies on the nixpkgs darwin
-  toolchain's ad-hoc signature — no `/usr/bin/codesign` call (repo purity
-  rule); the bundle itself needs no signature because the launchd wrapper
-  execs the binary directly.
-- Consumed by `device-priority-sanitizer.nix` (root HM module): options
+  `cycle-camera`, `configure`). The package source is a focused fileset
+  (`Sources/`, `raycast/`, `Info.plist`) — tests and docs must not change
+  the package hash. Signing relies on the nixpkgs darwin toolchain's ad-hoc
+  signature — no `/usr/bin/codesign` call; the bundle itself needs no
+  signature because the launchd wrapper execs the binary directly.
+- Consumed by `nix/home-manager.nix` (exported as
+  `homeManagerModules.default`; the flake sets
+  `services.device-priority-sanitizer.package` via `lib.mkDefault`): options
   `outputs`/`inputs`/`cameras` (`{ title, match, symbol }` tiers),
-  `fallbackSymbol` (incl. `camera`), `debounceMs`, and `autostart`
-  (default `true`). It writes
+  `fallbackSymbol` (incl. `camera`), `debounceMs`, `manageSoundEffects`, and
+  `autostart` (default `true`). It writes
   `~/Library/Application Support/device-priority-sanitizer/config.json`
   (store path passed as argv so a rebuild restarts the agent with new
   config), installs the CLI + Raycast commands, and — when `autostart` —
@@ -473,9 +475,38 @@ device-priority-sanitizer auto             # hidden test seam
   gone because the app owns `agent.log` itself (see App lifecycle). With
   `autostart = false` an activation boots out a still-loaded job and removes
   the plist — `device-priority-sanitizer start` launches the app on demand.
+  The launchd label is `<home.username>.device-priority-sanitizer` (read
+  from `config.home.username`, no extraSpecialArg needed).
 - The Raycast `set-output`/`set-input`/`set-camera` commands are **generated
-  in the root HM module**, not shipped by the package: their static tier
+  in the HM module**, not shipped by the package: their static tier
   dropdown must embed `cfg.outputs`/`cfg.inputs`/`cfg.cameras` titles
   (`title` is required and must be unique per target; the module asserts
   this). They call `set <target> --tier "$1"`. The `configure` command is
   package-shipped (static; opens the config window via `config`).
+
+## Development
+
+- `nix develop` — dev shell with the pre-commit hooks auto-installed
+  (shellHook from `checks.pre-commit-check`) plus: `swift`, `swift-format`,
+  `bats`, `jq`, `nixfmt`, `shellcheck`, `shfmt`, `convco`, `nixd`, `git`,
+  `gh`.
+- Hooks (git-hooks.nix, mirrored from the origin config repo): `nixfmt`,
+  `convco` (commit-msg), `shellcheck` + `shfmt` (scoped to `raycast/` and
+  `test/` with `types = []` + `--shell=bash` + `SC2239` exclusion so the
+  `@bash@` placeholder shebangs are handled). `swift-format` is deliberately
+  a flake check, not a hook (Swift toolchain too heavy for every invocation).
+- Verification: `nix flake check` (builds package, runs `unit`, `cli`,
+  `format`, and the pre-commit check) and `nix build .#default`. Quick
+  evaluation-only pass: `nix flake check --no-build`.
+- CI (`.github/workflows/ci.yml`): macOS Tahoe runner (`macos-26`), Nix via
+  DeterminateSystems installer + magic-nix-cache, runs `nix flake check` on
+  push/PR/tags.
+- Release process: bump the version in exactly three places (`default.nix`
+  `version`, `Sources/DevicePrioritySanitizer/Command.swift`
+  `programVersion`, `Info.plist` `CFBundleShortVersionString`), commit with a
+  conventional message, and tag an annotated `vX.Y.Z`.
+- History note: this repo was extracted from a private config repository;
+  `git-filter-repo` preserved the full app history, including the
+  pre-rename `audio-priority-sanitizer` era and the Home Manager module
+  (mapped to `nix/home-manager.nix`). Commit hashes differ from the origin
+  repository.

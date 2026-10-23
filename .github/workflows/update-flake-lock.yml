@@ -1,0 +1,23 @@
+name: Update flake.lock
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-flake-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/update-flake-lock@v26
+        with:
+          pr-title: "build: update flake.lock"
+          pr-labels: |
+            flake-update
+            dependencies

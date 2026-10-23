@@ -2,7 +2,6 @@
   config,
   lib,
   pkgs,
-  username,
   ...
 }:
 
@@ -10,7 +9,9 @@ let
   cfg = config.services.device-priority-sanitizer;
   isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
-  pkg = pkgs.callPackage ./pkgs/device-priority-sanitizer { };
+  username = config.home.username;
+
+  pkg = cfg.package;
 
   entrySubmodule = lib.types.submodule {
     options = {
@@ -186,6 +187,15 @@ in
 {
   options.services.device-priority-sanitizer = {
     enable = lib.mkEnableOption "the device priority sanitizer (menubar app, CLI, Raycast commands)";
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = pkgs.callPackage ../default.nix { };
+      description = ''
+        The device-priority-sanitizer package to install. Defaults to the
+        package shipped by this flake.
+      '';
+    };
 
     autostart = lib.mkOption {
       type = lib.types.bool;

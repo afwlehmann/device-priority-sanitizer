@@ -1,0 +1,32 @@
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+indent_style = space
+indent_size = 2
+max_line_length = 120
+
+# Swift: Xcode's conventional 4-space indentation. swift-format's own default
+# is 2/100, so the repo's .swift-format pins 4/120 for the format check.
+[*.{swift}]
+indent_size = 4
+max_line_length = 120
+
+# YAML (flake lock) — 2 spaces
+[*.{yaml,yml}]
+indent_size = 2
+
+# Shell scripts (extensionless, detected via shebang) — used by shfmt.
+# The [[bash]]/[[bats]] sections are a shfmt extension to the EditorConfig
+# spec for matching scripts without a .sh extension. See shfmt(1).
+[[bash]]
+indent_style = space
+indent_size = 2
+simplify = true
+
+[[bats]]
+indent_style = space
+indent_size = 2
+simplify = true

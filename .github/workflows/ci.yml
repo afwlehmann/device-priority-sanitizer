@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  system:
+    # One job detects the runner architecture and maps it to the flake's
+    # system attribute; every check job needs it for `nix build .#checks.<system>`.
+    runs-on: macos-26
+    outputs:
+      system: ${{ steps.detect.outputs.system }}
+    steps:
+      - id: detect
+        run: |
+          case "$(uname -m)" in
+            arm64) echo "system=aarch64-darwin" ;;
+            x86_64) echo "system=x86_64-darwin" ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+  lint:
+    needs: system
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          flakehub: false
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: Evaluate the flake
+        run: nix flake check --no-build
+      - name: pre-commit hooks (nixfmt, shellcheck, shfmt)
+        run: nix develop -c pre-commit run --all-files
+      - name: swift-format gate
+        run: nix develop -c nix build .#checks.${{ needs.system.outputs.system }}.format --print-build-logs
+
+  build:
+    needs: system
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          flakehub: false
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: Build the package
+        run: nix develop -c nix build .#default --print-build-logs
+
+  unit-tests:
+    needs: system
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          flakehub: false
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: Unit tests
+        run: nix develop -c nix build .#checks.${{ needs.system.outputs.system }}.unit --print-build-logs
+
+  cli-tests:
+    needs: system
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          flakehub: false
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - name: CLI integration tests
+        run: nix develop -c nix build .#checks.${{ needs.system.outputs.system }}.cli --print-build-logs
