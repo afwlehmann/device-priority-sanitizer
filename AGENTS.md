@@ -185,10 +185,14 @@ Jabra Evolve 75 SE                       restore     ← device + state label
   shown device and is dimmed when none does — label and Clear state derive
   from the same lookup that drives restore, so they can never disagree.
   Button clicks update their own state in place; no menu rebuild while open.
-- **The stored value is visible on the slider**: `LevelSliderCell` draws a
-  small accent tick on the bar at the saved position, so the bare
-  `restore`/`do not restore` label stays unambiguous. The numeric value is
-  also inspectable via `volume show`.
+- **The stored value is visible on the slider**: the custom-drawn
+  `LevelSliderControl` marks the saved position with a small accent tick on
+  its track, so the bare `restore`/`do not restore` label stays unambiguous.
+  The control draws everything itself (track, filled portion, tick, knob)
+  from its own bounds — `NSSliderCell` insets its bar by the knob thickness,
+  which visibly misaligned the two rows' tracks in 0.4.0; the geometry
+  mapping (`sliderKnobX`/`sliderValue`) is pure and unit-tested. The numeric
+  value is also inspectable via `volume show`.
 - Volume rows work regardless of the prioritization switch (manual control,
   like `set`/`cycle`). No volume row for the camera target.
 

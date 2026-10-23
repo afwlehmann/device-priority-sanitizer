@@ -1225,6 +1225,30 @@ func runUnitTests() {
         try expectEqual(fixture.devices.first?.volume?.input, nil, "unseeded direction is nil")
     }
 
+    // MARK: Slider geometry (custom control mapping)
+
+    run("slider mapping is symmetric, clamped, and clip-free") {
+        // Knob positions: the center stays inside [radius, width - radius].
+        try expectEqual(sliderKnobX(for: 0, width: 200, knobRadius: 5), 5, "minimum at the left inset")
+        try expectEqual(sliderKnobX(for: 1, width: 200, knobRadius: 5), 195, "maximum at the right inset")
+        try expectEqual(sliderKnobX(for: 0.5, width: 200, knobRadius: 5), 100, "midpoint centered")
+        try expectEqual(sliderKnobX(for: -0.5, width: 200, knobRadius: 5), 5, "below-min clamps")
+        try expectEqual(sliderKnobX(for: 1.5, width: 200, knobRadius: 5), 195, "above-max clamps")
+        // Positions → values, same clamping.
+        try expectEqual(sliderValue(forX: 5, width: 200, knobRadius: 5), 0, "left inset is zero")
+        try expectEqual(sliderValue(forX: 195, width: 200, knobRadius: 5), 1, "right inset is one")
+        try expectEqual(sliderValue(forX: 100, width: 200, knobRadius: 5), 0.5, "center is half")
+        try expectEqual(sliderValue(forX: -10, width: 200, knobRadius: 5), 0, "outside-left clamps")
+        try expectEqual(sliderValue(forX: 500, width: 200, knobRadius: 5), 1, "outside-right clamps")
+        // Exact round-trip through both directions.
+        try expectEqual(
+            sliderKnobX(for: sliderValue(forX: 100, width: 200, knobRadius: 5), width: 200, knobRadius: 5), 100,
+            "round-trip")
+        // Degenerate width (no usable span): knob parked, value zero.
+        try expectEqual(sliderKnobX(for: 0.7, width: 8, knobRadius: 5), 5, "degenerate width parks the knob")
+        try expectEqual(sliderValue(forX: 4, width: 8, knobRadius: 5), 0, "degenerate width yields zero")
+    }
+
     // MARK: Agent lifecycle (start/stop planning)
 
     func withTempDirectory(_ body: (String) throws -> Void) throws {

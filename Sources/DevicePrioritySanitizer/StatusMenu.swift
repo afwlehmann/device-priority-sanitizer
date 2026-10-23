@@ -302,20 +302,100 @@ struct LevelRowState: Equatable, Sendable {
     var savedLevel: Float?
 }
 
-/// Slider cell that additionally marks the *stored* level on the bar (small
-/// accent tick), so the row can label the restore state with a bare
-/// "restore" / "do not restore" while the saved value stays visible.
-final class LevelSliderCell: NSSliderCell {
-    var savedLevel: Float?
+/// Pure x↔value mapping for `LevelSliderControl`, kept as free functions so
+/// the geometry is unit-testable. The knob center travels between
+/// `knobRadius` and `width - knobRadius`, so the knob never clips the track.
+func sliderKnobX(for value: Float, width: CGFloat, knobRadius: CGFloat) -> CGFloat {
+    let usable = width - knobRadius * 2
+    guard usable > 0 else { return knobRadius }
+    let clamped = CGFloat(min(max(value, 0), 1))
+    return knobRadius + clamped * usable
+}
 
-    override func drawBar(inside barRect: NSRect, flipped: Bool) {
-        super.drawBar(inside: barRect, flipped: flipped)
-        guard let savedLevel else { return }
-        let clamped = CGFloat(min(max(savedLevel, 0), 1))
-        let x = barRect.minX + barRect.width * clamped
-        let marker = NSRect(x: x - 1, y: barRect.minY - 1.5, width: 2, height: barRect.height + 3)
-        NSColor.controlAccentColor.setFill()
-        NSBezierPath(roundedRect: marker, xRadius: 1, yRadius: 1).fill()
+func sliderValue(forX x: CGFloat, width: CGFloat, knobRadius: CGFloat) -> Float {
+    let usable = width - knobRadius * 2
+    guard usable > 0 else { return 0 }
+    return Float(min(max((x - knobRadius) / usable, 0), 1))
+}
+
+/// Custom-drawn volume slider. `NSSliderCell` insets its bar by the knob
+/// thickness — metrics that varied between rows and visibly misaligned the
+/// two tracks. This control draws everything itself (track, filled portion,
+/// saved-level tick, knob) from its own bounds, so every row shares the same
+/// geometry and the track starts exactly at the row's leading edge.
+final class LevelSliderControl: NSControl {
+    /// Live 0…1 level.
+    var level: Float = 0 {
+        didSet { needsDisplay = true }
+    }
+    /// Stored level rendered as an accent tick; `nil` → no tick.
+    var savedLevel: Float? {
+        didSet { needsDisplay = true }
+    }
+
+    private let knobRadius: CGFloat = 5
+    private let trackHeight: CGFloat = 4
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityRole(.slider)
+        setAccessibilityMinValue(0)
+        setAccessibilityMaxValue(1)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("LevelSliderControl is built programmatically")
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let midY = bounds.midY
+        let knobX = sliderKnobX(for: level, width: bounds.width, knobRadius: knobRadius)
+        let track = NSRect(x: 0, y: midY - trackHeight / 2, width: bounds.width, height: trackHeight)
+
+        // Track and the filled portion up to the knob.
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: track, xRadius: trackHeight / 2, yRadius: trackHeight / 2).fill()
+        let fill = NSRect(x: 0, y: track.minY, width: knobX, height: trackHeight)
+        if fill.width > 0 {
+            NSColor.secondaryLabelColor.setFill()
+            NSBezierPath(roundedRect: fill, xRadius: trackHeight / 2, yRadius: trackHeight / 2).fill()
+        }
+
+        // Stored-level tick: a small accent bar spanning the track.
+        if let savedLevel {
+            let x = sliderKnobX(for: savedLevel, width: bounds.width, knobRadius: knobRadius)
+            let tick = NSRect(x: x - 1, y: midY - 7, width: 2, height: 14)
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(roundedRect: tick, xRadius: 1, yRadius: 1).fill()
+        }
+
+        // Knob.
+        let knob = NSRect(x: knobX - knobRadius, y: midY - knobRadius, width: knobRadius * 2, height: knobRadius * 2)
+        (isEnabled ? NSColor.labelColor : NSColor.disabledControlTextColor).setFill()
+        NSBezierPath(ovalIn: knob).fill()
+    }
+
+    // MARK: Interaction
+
+    override func mouseDown(with event: NSEvent) {
+        updateLevel(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        updateLevel(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        updateLevel(with: event)
+    }
+
+    private func updateLevel(with event: NSEvent) {
+        guard isEnabled else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        level = sliderValue(forX: point.x, width: bounds.width, knobRadius: knobRadius)
+        setAccessibilityValue(NSNumber(value: Double(level)))
+        sendAction(action, to: target)
     }
 }
 
@@ -337,8 +417,7 @@ final class LevelRowView: NSView {
     private weak var menuController: MenuController?
     private let deviceLabel: NSTextField
     private let restoreLabel: NSTextField
-    private let slider: NSSlider
-    private let sliderCell: LevelSliderCell
+    private let slider: LevelSliderControl
     private let saveButton: NSButton
     private let clearButton: NSButton
 
@@ -353,50 +432,58 @@ final class LevelRowView: NSView {
     init(target: Target, state: LevelRowState, menuController: MenuController) {
         self.target = target
         self.menuController = menuController
-        let rightX = Self.rowWidth - Self.rightColumnWidth - 4
-        let leftWidth = rightX - 12
 
         deviceLabel = NSTextField(labelWithString: "")
         deviceLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         deviceLabel.lineBreakMode = .byTruncatingTail
-        deviceLabel.frame = NSRect(x: 6, y: 26, width: leftWidth, height: 14)
 
         restoreLabel = NSTextField(labelWithString: "")
         restoreLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         restoreLabel.lineBreakMode = .byTruncatingTail
-        restoreLabel.frame = NSRect(x: rightX, y: 26, width: Self.rightColumnWidth, height: 14)
 
-        sliderCell = LevelSliderCell()
-        sliderCell.minValue = 0
-        sliderCell.maxValue = 1
-        sliderCell.isContinuous = true
-        sliderCell.controlSize = .small
-        slider = NSSlider(frame: NSRect(x: 6, y: 0, width: leftWidth, height: 20))
-        slider.cell = sliderCell
+        slider = LevelSliderControl(frame: .zero)
         slider.setAccessibilityLabel("\(target.menuTitle) volume")
 
-        saveButton = Self.smallButton(
-            title: "Save", action: #selector(saveClicked),
-            frame: NSRect(x: rightX, y: 0, width: Self.saveWidth, height: 20))
+        saveButton = Self.smallButton(title: "Save", action: #selector(saveClicked), frame: .zero)
         saveButton.setAccessibilityLabel("Save \(target.menuTitle) level")
-        clearButton = Self.smallButton(
-            title: "Clear", action: #selector(clearClicked),
-            frame: NSRect(x: rightX + Self.saveWidth + Self.buttonGap, y: 0, width: Self.clearWidth, height: 20))
+        clearButton = Self.smallButton(title: "Clear", action: #selector(clearClicked), frame: .zero)
         clearButton.setAccessibilityLabel("Clear saved \(target.menuTitle) level")
 
         super.init(frame: NSRect(x: 0, y: 0, width: Self.rowWidth, height: Self.rowHeight))
         // Targets reference self — only assignable after super.init.
-        sliderCell.target = self
-        sliderCell.action = #selector(sliderMoved)
+        slider.target = self
+        slider.action = #selector(sliderMoved)
         saveButton.target = self
         clearButton.target = self
         [deviceLabel, restoreLabel, slider, saveButton, clearButton].forEach { addSubview($0) }
+        layoutFrames()
         apply(state)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("LevelRowView is built programmatically")
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        layoutFrames()
+    }
+
+    /// One geometry pass shared by both rows: the right column (state label
+    /// over Save/Clear) is pinned to the trailing edge, the left column
+    /// (device name over the slider) fills the remainder. Recomputed on
+    /// resize so a wider menu can never break the alignment.
+    private func layoutFrames() {
+        let leftX: CGFloat = 6
+        let rightX = bounds.width - Self.rightColumnWidth - 4
+        let leftWidth = rightX - leftX - 2
+        deviceLabel.frame = NSRect(x: leftX, y: 26, width: leftWidth, height: 14)
+        restoreLabel.frame = NSRect(x: rightX, y: 26, width: Self.rightColumnWidth, height: 14)
+        slider.frame = NSRect(x: leftX, y: 0, width: leftWidth, height: 20)
+        saveButton.frame = NSRect(x: rightX, y: 0, width: Self.saveWidth, height: 20)
+        clearButton.frame = NSRect(
+            x: rightX + Self.saveWidth + Self.buttonGap, y: 0, width: Self.clearWidth, height: 20)
     }
 
     private static func smallButton(title: String, action: Selector, frame: NSRect) -> NSButton {
@@ -413,9 +500,8 @@ final class LevelRowView: NSView {
         deviceLabel.toolTip = state.deviceName
         let hasVolume = state.deviceName != nil && state.liveLevel != nil
         slider.isEnabled = hasVolume
-        sliderCell.doubleValue = Double(state.liveLevel ?? 0)
-        sliderCell.savedLevel = state.savedLevel
-        slider.needsDisplay = true
+        slider.level = state.liveLevel ?? 0
+        slider.savedLevel = state.savedLevel
         saveButton.isEnabled = hasVolume
         applySavedLevel(state.savedLevel)
     }
@@ -423,12 +509,11 @@ final class LevelRowView: NSView {
     private func applySavedLevel(_ level: Float?) {
         restoreLabel.stringValue = level == nil ? "do not restore" : "restore"
         clearButton.isEnabled = level != nil
-        sliderCell.savedLevel = level
-        slider.needsDisplay = true
+        slider.savedLevel = level
     }
 
     @objc private func sliderMoved() {
-        menuController?.onSetVolume?(target, Float(sliderCell.doubleValue))
+        menuController?.onSetVolume?(target, slider.level)
     }
 
     @objc private func saveClicked() {
