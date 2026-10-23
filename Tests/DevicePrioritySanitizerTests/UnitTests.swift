@@ -990,6 +990,241 @@ func runUnitTests() {
         )
     }
 
+    // MARK: Saved levels (per-device volume restore)
+
+    func levelEntry(
+        _ uid: String, name: String = "Jabra Evolve 75 SE", modelUID: String? = "jabra-evolve-75",
+        level: Float
+    ) -> SavedLevel {
+        SavedLevel(
+            uid: uid, name: name, modelUID: modelUID, transport: .bluetooth, level: level,
+            savedAt: "2026-01-01T00:00:00Z"
+        )
+    }
+
+    run("levels document decodes, defaults, and round-trips") {
+        let json = """
+            {"output": {"evolve": {"uid": "evolve", "name": "Jabra Evolve 75 SE",
+              "modelUID": "jabra-evolve-75", "transport": "bluetooth", "level": 0.42,
+              "savedAt": "2026-01-01T00:00:00Z"}}}
+            """
+        let document = try JSONDecoder().decode(LevelsDocument.self, from: Data(json.utf8))
+        try expectEqual(document.output["evolve"]?.level, 0.42, "entry decodes")
+        try expectEqual(document.schemaVersion, 1, "schema version defaults for old files")
+        let empty = try JSONDecoder().decode(LevelsDocument.self, from: Data("{}".utf8))
+        try expectEqual(empty, LevelsDocument.empty, "an empty object decodes as the empty document")
+        let reencoded = try JSONDecoder().decode(LevelsDocument.self, from: try JSONEncoder().encode(document))
+        try expectEqual(reencoded, document, "round-trips through encode/decode")
+    }
+
+    run("upsert and remove maintain the per-target maps") {
+        var document = LevelsDocument.empty
+        let entry = levelEntry("evolve", level: 0.42)
+        document.upsert(entry, for: .output)
+        try expectEqual(document.entries(for: .output)["evolve"], entry, "output entry upserted")
+        document.upsert(levelEntry("evolve", level: 0.7), for: .output)
+        try expectEqual(document.output["evolve"]?.level, 0.7, "upsert overwrites")
+        document.upsert(levelEntry("mic", name: "MacBook Pro Microphone", modelUID: nil, level: 0.5), for: .input)
+        try expectEqual(document.input.count, 1, "input map independent")
+        document.remove(uid: "evolve", for: .input)
+        try expectEqual(document.input.count, 1, "removal is per target")
+        document.remove(uid: "evolve", for: .output)
+        try check(document.output.isEmpty, "output entry removed")
+    }
+
+    run("saved level lookup: exact UID wins over a replacement candidate") {
+        let document = LevelsDocument(
+            output: [
+                "evolve": levelEntry("evolve", level: 0.42),
+                "evolve-old": levelEntry("evolve-old", level: 0.25),
+            ], input: [:])
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        try expectEqual(
+            savedLevel(for: evolve, target: .output, document: document, connectedUIDs: []),
+            .exact(document.output["evolve"]!),
+            "exact UID wins even with a replacement candidate present"
+        )
+    }
+
+    run("saved level lookup: replacement match for an absent unit of the same model") {
+        let old = levelEntry("evolve-old", level: 0.25)
+        let document = LevelsDocument(output: ["evolve-old": old], input: [:])
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        try expectEqual(
+            savedLevel(for: evolve, target: .output, document: document, connectedUIDs: ["evolve"]),
+            .replacement(old),
+            "unique name+model match with the old UID disconnected"
+        )
+    }
+
+    run("saved level lookup: the gate — a connected old UID never cross-applies") {
+        // Two same-model units connected: the entry for evolve-old must not
+        // restore onto its twin evolve while the old unit is still present.
+        let old = levelEntry("evolve-old", level: 0.25)
+        let document = LevelsDocument(output: ["evolve-old": old], input: [:])
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        try expectEqual(
+            savedLevel(
+                for: evolve, target: .output, document: document,
+                connectedUIDs: ["evolve", "evolve-old"]),
+            .none,
+            "no cross-apply between two connected same-name devices"
+        )
+    }
+
+    run("saved level lookup: mismatch, ambiguity, and the camera target restore nothing") {
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        // Model mismatch.
+        var document = LevelsDocument(
+            output: ["old": levelEntry("old", modelUID: "different-model", level: 0.25)], input: [:])
+        try expectEqual(
+            savedLevel(for: evolve, target: .output, document: document, connectedUIDs: []),
+            .none,
+            "model UID mismatch"
+        )
+        // One-sided model UID.
+        document = LevelsDocument(output: ["old": levelEntry("old", modelUID: nil, level: 0.25)], input: [:])
+        try expectEqual(
+            savedLevel(for: evolve, target: .output, document: document, connectedUIDs: []),
+            .none,
+            "a nil model UID on one side is not a match"
+        )
+        // Name mismatch.
+        document = LevelsDocument(
+            output: ["old": levelEntry("old", name: "Something else", level: 0.25)], input: [:])
+        try expectEqual(
+            savedLevel(for: evolve, target: .output, document: document, connectedUIDs: []),
+            .none,
+            "name mismatch"
+        )
+        // Ambiguity: two same-name candidates with nil model UIDs.
+        document = LevelsDocument(
+            output: [
+                "old1": levelEntry("old1", modelUID: nil, level: 0.2),
+                "old2": levelEntry("old2", modelUID: nil, level: 0.4),
+            ], input: [:])
+        let twin = MediaDevice(
+            uid: "twin", name: "Jabra Evolve 75 SE", transportClass: .bluetooth, deviceType: nil,
+            modelUID: nil, capabilities: [.output]
+        )
+        try expectEqual(
+            savedLevel(for: twin, target: .output, document: document, connectedUIDs: []),
+            .none,
+            "ambiguous candidates restore nothing"
+        )
+        // Camera never participates.
+        document = LevelsDocument(
+            output: [:],
+            input: [
+                "facetime": levelEntry("facetime", name: "FaceTime HD Camera", level: 0.5)
+            ])
+        let facetime = Fixtures.devices().first { $0.uid == "facetime" }!
+        try expectEqual(
+            savedLevel(for: facetime, target: .camera, document: document, connectedUIDs: []),
+            .none,
+            "camera target has no saved levels"
+        )
+    }
+
+    run("restore applies a saved level and skips absent or unsupported devices") {
+        let document = LevelsDocument(
+            output: [
+                "evolve": levelEntry("evolve", level: 0.42),
+                "dell": levelEntry("dell", name: "DELL U3824DW", modelUID: nil, level: 0.7),
+            ], input: [:])
+        let connectedUIDs = Set(Fixtures.devices().map(\.uid))
+
+        // Exact entry: the write lands on the device.
+        let source = Fixtures.overlay(
+            output: "jabra510", input: "mic", volumes: [.output: ["evolve": 0.4], .input: ["mic": 0.6]])
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        try expectEqual(
+            restoreSavedLevel(
+                device: evolve, target: .output, source: source, document: document,
+                connectedUIDs: connectedUIDs, perform: true),
+            .restored(level: 0.42, replacement: false),
+            "restored outcome"
+        )
+        try expectEqual(source.volume(for: evolve, target: .output), 0.42, "volume written")
+
+        // No entry: nothing happens.
+        let jabra510 = Fixtures.devices().first { $0.uid == "jabra510" }!
+        try expectEqual(
+            restoreSavedLevel(
+                device: jabra510, target: .output, source: source, document: document,
+                connectedUIDs: connectedUIDs, perform: true),
+            .noEntry,
+            "no entry restores nothing"
+        )
+
+        // Entry exists but the device has no volume control in this source.
+        let dell = Fixtures.devices().first { $0.uid == "dell" }!
+        try expectEqual(
+            restoreSavedLevel(
+                device: dell, target: .output, source: source, document: document,
+                connectedUIDs: connectedUIDs, perform: true),
+            .unsupported,
+            "unsupported device restores nothing"
+        )
+
+        // Dry-run reports the would-be restore without writing.
+        let dry = Fixtures.overlay(output: "jabra510", input: "mic", volumes: [.output: ["evolve": 0.4]])
+        try expectEqual(
+            restoreSavedLevel(
+                device: evolve, target: .output, source: dry, document: document,
+                connectedUIDs: connectedUIDs, perform: false),
+            .restored(level: 0.42, replacement: false),
+            "dry-run outcome"
+        )
+        try expectEqual(dry.volume(for: evolve, target: .output), 0.4, "dry-run performs no write")
+    }
+
+    run("restore reports a replacement match for a swapped unit") {
+        let old = levelEntry("evolve-old", level: 0.25)
+        let document = LevelsDocument(output: ["evolve-old": old], input: [:])
+        let source = Fixtures.overlay(output: "jabra510", input: "mic", volumes: [.output: ["evolve": 0.4]])
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        try expectEqual(
+            restoreSavedLevel(
+                device: evolve, target: .output, source: source, document: document,
+                connectedUIDs: ["evolve", "jabra510", "mic"], perform: true),
+            .restored(level: 0.25, replacement: true),
+            "replacement restore outcome"
+        )
+        try expectEqual(source.volume(for: evolve, target: .output), 0.25, "replacement level written")
+    }
+
+    run("fixture source seeds model UIDs and per-direction volumes") {
+        let source = FixtureDeviceSource(
+            devices: Fixtures.devices(), defaultOutput: "evolve", defaultInput: "mic",
+            volumes: [.output: ["evolve": 0.4], .input: ["mic": 0.6]]
+        )
+        let evolve = Fixtures.devices().first { $0.uid == "evolve" }!
+        try expectEqual(source.volume(for: evolve, target: .output), 0.4, "seeded output volume")
+        try expectEqual(source.volume(for: evolve, target: .input), nil, "unseeded direction is unsupported")
+        _ = source.setVolume(0.7, for: evolve, target: .input)
+        try expectEqual(source.volume(for: evolve, target: .input), 0.7, "set volume reads back")
+        let facetime = Fixtures.devices().first { $0.uid == "facetime" }!
+        try expectEqual(source.volume(for: facetime, target: .camera), nil, "camera has no volume")
+        try expectEqual(
+            source.setVolume(0.5, for: facetime, target: .camera), OSStatus(paramErr),
+            "camera volume writes are refused"
+        )
+    }
+
+    run("fixture JSON decodes modelUID and volume seeds; legacy tables still work") {
+        let withVolumes = """
+            {"devices": [
+              {"uid": "a", "name": "A", "transport": "usb", "isOutput": true, "isInput": false,
+               "modelUID": "model-a", "volume": {"output": 0.4}}
+            ], "defaultOutput": "a", "defaultInput": null}
+            """
+        let fixture = try JSONDecoder().decode(FixtureData.self, from: Data(withVolumes.utf8))
+        try expectEqual(fixture.devices.first?.modelUID, "model-a", "modelUID decodes")
+        try expectEqual(fixture.devices.first?.volume?.output, 0.4, "volume seed decodes")
+        try expectEqual(fixture.devices.first?.volume?.input, nil, "unseeded direction is nil")
+    }
+
     // MARK: Agent lifecycle (start/stop planning)
 
     func withTempDirectory(_ body: (String) throws -> Void) throws {

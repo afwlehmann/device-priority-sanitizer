@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "output": {
+    "evolve-old": {
+      "uid": "evolve-old",
+      "name": "Jabra Evolve 75 SE",
+      "modelUID": "jabra-evolve-75",
+      "transport": "bluetooth",
+      "level": 0.25,
+      "savedAt": "2026-01-01T00:00:00Z"
+    }
+  },
+  "input": {}
+}

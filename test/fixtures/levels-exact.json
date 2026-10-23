@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "output": {
+    "evolve": {
+      "uid": "evolve",
+      "name": "Jabra Evolve 75 SE",
+      "modelUID": "jabra-evolve-75",
+      "transport": "bluetooth",
+      "level": 0.42,
+      "savedAt": "2026-10-23T10:00:00Z"
+    },
+    "earpods": {
+      "uid": "earpods",
+      "name": "EarPods",
+      "modelUID": "apple-earpods",
+      "transport": "usb",
+      "level": 0.15,
+      "savedAt": "2026-10-23T10:00:00Z"
+    }
+  },
+  "input": {}
+}

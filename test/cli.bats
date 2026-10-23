@@ -542,6 +542,155 @@ CAMFLAGS=(--config "${FIXTURES}/config-cameras.json" --devices "${FIXTURES}/devi
   assert_status 64
 }
 
+# ── Volume levels (per-device restore) ────────────────────────────────────────
+# devices-volumes.json seeds volumes (a seeded direction is volume-capable;
+# jabra510 is deliberately unseeded) and model UIDs; defaultOutput is
+# jabra510, defaultInput is mic. Every store-touching test passes --levels
+# against BATS_TEST_TMPDIR or a fixture, so the live levels.json is never
+# written. Restore lines are observed through set/cycle/reapply --dry-run.
+
+VOLFLAGS=(--config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-volumes.json")
+
+@test "volume get prints the current device level" {
+  run $BIN "${VOLFLAGS[@]}" volume get input
+  assert_success
+  assert_output_is "input: 0.60"
+}
+
+@test "volume get on a device without volume control exits 66" {
+  run $BIN "${VOLFLAGS[@]}" volume get output
+  assert_failure
+  assert_status 66
+  assert_has_line "Jabra SPEAK 510 USB has no output volume control"
+}
+
+@test "volume set updates the level; fixtures require --dry-run" {
+  run $BIN "${VOLFLAGS[@]}" --dry-run volume set input 0.7
+  assert_success
+  assert_output_is "input: would set volume to 0.70"
+  run $BIN "${VOLFLAGS[@]}" volume set input 0.7
+  assert_failure
+  assert_status 64
+}
+
+@test "volume save writes the store and show reads it back" {
+  local levels="${BATS_TEST_TMPDIR}/levels.json"
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" volume save input
+  assert_success
+  assert_output_is "input: saved 60% for MacBook Pro Microphone"
+  run $BIN --levels "$levels" volume show
+  assert_success
+  assert_line_matches '^input: 60% MacBook Pro Microphone \(mic, saved '
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" --dry-run volume save input
+  assert_success
+  assert_output_is "input: would save 60% for MacBook Pro Microphone"
+}
+
+@test "volume clear removes the entry and is idempotent" {
+  local levels="${BATS_TEST_TMPDIR}/levels.json"
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" volume save input
+  assert_success
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" volume clear input
+  assert_success
+  assert_output_is "input: cleared saved level for MacBook Pro Microphone"
+  run $BIN --levels "$levels" volume show
+  assert_has_line "input: no saved levels"
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" volume clear input
+  assert_success
+  assert_output_is "input: no saved level for MacBook Pro Microphone"
+}
+
+@test "activating a device restores its exact saved level" {
+  run $BIN "${VOLFLAGS[@]}" --levels "${FIXTURES}/levels-exact.json" --dry-run set output "Jabra Evolve 75 SE"
+  assert_success
+  assert_has_line "output: would set to Jabra Evolve 75 SE"
+  assert_has_line "output: would restore saved level 42%"
+  run $BIN "${VOLFLAGS[@]}" --levels "${FIXTURES}/levels-exact.json" --dry-run reapply
+  assert_success
+  # From jabra510 the force-apply picks the alphabetically-first tier-0
+  # device (EarPods), which carries its own exact entry.
+  assert_has_line "output: would set to EarPods"
+  assert_has_line "output: would restore saved level 15%"
+}
+
+@test "cycle restores the newly activated device's saved level" {
+  # From jabra510 the cycle advances to MacBook Pro Speakers (visible order:
+  # tier 0 headsets → tier 1 SPEAK 510 → tier 2 built-in speakers).
+  local levels="${BATS_TEST_TMPDIR}/levels-spk.json"
+  cat >"$levels" <<'EOF'
+{
+  "schemaVersion": 1,
+  "output": {
+    "spk": {
+      "uid": "spk",
+      "name": "MacBook Pro Speakers",
+      "modelUID": "apple-speakers",
+      "transport": "builtIn",
+      "level": 0.3,
+      "savedAt": "2026-01-01T00:00:00Z"
+    }
+  },
+  "input": {}
+}
+EOF
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" --dry-run cycle output
+  assert_success
+  assert_has_line "output: would cycle to MacBook Pro Speakers"
+  assert_has_line "output: would restore saved level 30%"
+}
+
+@test "activating a replacement device restores via the fallback match" {
+  # levels-replacement.json holds an entry for a disconnected old unit with
+  # the same name + model UID as the connected evolve — the unique match.
+  run $BIN "${VOLFLAGS[@]}" --levels "${FIXTURES}/levels-replacement.json" --dry-run set output "Jabra Evolve 75 SE"
+  assert_success
+  assert_has_line "output: would restore saved level 25% (replacement match)"
+}
+
+@test "activating a device without a saved level adds no restore line" {
+  local levels="${BATS_TEST_TMPDIR}/nonexistent-levels.json"
+  run $BIN "${VOLFLAGS[@]}" --levels "$levels" --dry-run set output "Jabra Evolve 75 SE"
+  assert_success
+  assert_output_is "output: would set to Jabra Evolve 75 SE"
+}
+
+@test "volume rejects bad targets, levels, and trailing arguments" {
+  run $BIN "${VOLFLAGS[@]}" volume
+  assert_failure
+  assert_status 64
+  run $BIN "${VOLFLAGS[@]}" volume frob
+  assert_failure
+  assert_status 64
+  run $BIN "${VOLFLAGS[@]}" volume get camera
+  assert_failure
+  assert_status 64
+  run $BIN "${VOLFLAGS[@]}" volume set input 2
+  assert_failure
+  assert_status 64
+  run $BIN "${VOLFLAGS[@]}" volume get input extra
+  assert_failure
+  assert_status 64
+  run $BIN "${VOLFLAGS[@]}" volume get
+  assert_failure
+  assert_status 64
+}
+
+@test "volume show --json emits the raw document" {
+  run $BIN --levels "${FIXTURES}/levels-exact.json" --json volume show
+  assert_success
+  local level
+  level="$(jq -r '.output.evolve.level' <<<"$output")"
+  assert_equal "$level" "0.42"
+}
+
+@test "volume commands never load the tier config" {
+  # A broken config must not prevent volume control (same rule as
+  # enable/disable/start/stop).
+  run $BIN --config "${FIXTURES}/config-broken.json" --devices "${FIXTURES}/devices-volumes.json" volume get input
+  assert_success
+  assert_output_is "input: 0.60"
+}
+
 # ── Lifecycle (start/stop) ────────────────────────────────────────────────────
 # The menubar app IS the agent — start/stop control that one process. With the
 # HM LaunchAgent installed, KeepAlive resurrects plain exits, so stopping must

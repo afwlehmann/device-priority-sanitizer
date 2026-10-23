@@ -2,7 +2,7 @@ import Foundation
 
 let programName = "device-priority-sanitizer"
 
-let programVersion = "0.3.0"
+let programVersion = "0.4.0"
 
 func logStderr(_ message: String) {
     FileHandle.standardError.write(Data("[\(programName)] \(message)\n".utf8))
@@ -254,6 +254,9 @@ func runList(
                     if let deviceType = device.deviceType {
                         entry["deviceType"] = deviceType
                     }
+                    if let modelUID = device.modelUID {
+                        entry["modelUID"] = modelUID
+                    }
                     return entry
                 }
             sections[target.rawValue] = entries
@@ -307,18 +310,23 @@ func runCurrent(
 }
 
 /// Shared effect for `set <name>` and `set --tier`: one manual pick, with the
-/// usual already-set / dry-run reporting.
+/// usual already-set / dry-run reporting. An activation (actual change, or a
+/// dry-run that would change) also reports/applies the device's saved level.
 private func applyDefaultDevice(
     _ device: MediaDevice,
     target: Target,
     source: DeviceSource,
-    dryRun: Bool
+    dryRun: Bool,
+    levelsPath: String?
 ) throws -> CommandOutput {
     if source.defaultDevice(for: target)?.uid == device.uid {
         return CommandOutput(lines: ["\(target.rawValue): already \(device.name)"])
     }
     if dryRun {
-        return CommandOutput(lines: ["\(target.rawValue): would set to \(device.name)"])
+        return CommandOutput(
+            lines: ["\(target.rawValue): would set to \(device.name)"]
+                + restoreLines(
+                    device: device, target: target, source: source, dryRun: true, levelsPath: levelsPath))
     }
     let status = source.setDefault(device, target: target)
     guard status == noErr else {
@@ -326,7 +334,10 @@ private func applyDefaultDevice(
             "failed to set \(target.rawValue) to \(device.name): OSStatus \(status)"
         )
     }
-    return CommandOutput(lines: ["\(target.rawValue): set to \(device.name)"])
+    return CommandOutput(
+        lines: ["\(target.rawValue): set to \(device.name)"]
+            + restoreLines(
+                device: device, target: target, source: source, dryRun: false, levelsPath: levelsPath))
 }
 
 func runSet(
@@ -357,7 +368,8 @@ func runSet(
             )
         case .device(let device):
             return try applyDefaultDevice(
-                device, target: target, source: source, dryRun: options.dryRun
+                device, target: target, source: source, dryRun: options.dryRun,
+                levelsPath: options.levelsPath
             )
         }
     }
@@ -373,9 +385,59 @@ func runSet(
         throw CliFailure.ambiguous(target: target.rawValue, name: name, candidates: candidates)
     case .matched(let device):
         return try applyDefaultDevice(
-            device, target: target, source: source, dryRun: options.dryRun
+            device, target: target, source: source, dryRun: options.dryRun,
+            levelsPath: options.levelsPath
         )
     }
+}
+
+/// Restore lines for every plan entry that actually changes the default —
+/// the same set `performPlan` writes. Empty lines for targets with no saved
+/// level; a failed volume write degrades to a warning line, never a failure
+/// (the device switch itself succeeded).
+func restoreLines(
+    device: MediaDevice,
+    target: Target,
+    source: DeviceSource,
+    dryRun: Bool,
+    levelsPath: String?
+) -> [String] {
+    let path = levelsPath ?? defaultLevelsPath()
+    let outcome = restoreSavedLevel(
+        device: device,
+        target: target,
+        source: source,
+        document: loadLevelsDocument(path),
+        connectedUIDs: Set(source.allDevices().map(\.uid)),
+        perform: !dryRun
+    )
+    switch outcome {
+    case .restored(let level, let replacement):
+        let suffix = replacement ? " (replacement match)" : ""
+        return [
+            "\(target.rawValue): \(dryRun ? "would restore" : "restored") saved level \(levelPercent(level))%\(suffix)"
+        ]
+    case .failed(let status):
+        return ["\(target.rawValue): warning — could not restore saved level (OSStatus \(status))"]
+    case .noEntry, .unsupported:
+        return []
+    }
+}
+
+func planRestoreExtras(
+    _ plan: [PlannedChange],
+    source: DeviceSource,
+    dryRun: Bool,
+    levelsPath: String?
+) -> [String] {
+    plan
+        .filter { $0.device != nil && $0.current?.uid != $0.device?.uid }
+        .flatMap { change in
+            restoreLines(
+                device: change.device!, target: change.target, source: source,
+                dryRun: dryRun, levelsPath: levelsPath
+            )
+        }
 }
 
 func runReapply(
@@ -391,7 +453,9 @@ func runReapply(
         source: source, engine: engine, devices: devices, force: true,
         prioritizationEnabled: prioritizationEnabled
     )
-    let lines = renderPlan(plan, dryRun: options.dryRun)
+    let lines =
+        renderPlan(plan, dryRun: options.dryRun)
+        + planRestoreExtras(plan, source: source, dryRun: options.dryRun, levelsPath: options.levelsPath)
     try performPlan(plan, on: source, dryRun: options.dryRun)
     return CommandOutput(lines: lines)
 }
@@ -413,7 +477,10 @@ func runCycle(
         return CommandOutput(lines: ["\(target.rawValue): unchanged (\(next.name))"])
     }
     if options.dryRun {
-        return CommandOutput(lines: ["\(target.rawValue): would cycle to \(next.name)"])
+        return CommandOutput(
+            lines: ["\(target.rawValue): would cycle to \(next.name)"]
+                + restoreLines(
+                    device: next, target: target, source: source, dryRun: true, levelsPath: options.levelsPath))
     }
     let status = source.setDefault(next, target: target)
     guard status == noErr else {
@@ -421,7 +488,10 @@ func runCycle(
             "failed to cycle \(target.rawValue) to \(next.name): OSStatus \(status)"
         )
     }
-    return CommandOutput(lines: ["\(target.rawValue): cycled to \(next.name)"])
+    return CommandOutput(
+        lines: ["\(target.rawValue): cycled to \(next.name)"]
+            + restoreLines(
+                device: next, target: target, source: source, dryRun: false, levelsPath: options.levelsPath))
 }
 
 // MARK: - Prioritization switch (state only; never loads the tier config)
@@ -496,6 +566,159 @@ func runStatus(_ options: Options) throws -> CommandOutput {
     } catch {
         let lines = ["prioritization: \(enabled ? "enabled" : "disabled")", "targets: unavailable (invalid config)"]
         return CommandOutput(lines: lines, exitCode: 65)
+    }
+}
+
+// MARK: - Volume (live get/set; save/clear/show the per-device store)
+
+/// `volume <get|set|save|clear> <output|input>` share the target tail; the
+/// camera target is refused — it has no volume.
+private func volumeTarget(_ options: Options, subcommand: String) throws -> Target {
+    guard options.positional.count >= 3 else {
+        throw CliFailure.usage("usage: \(programName) volume \(subcommand) <output|input>")
+    }
+    guard let target = Target(rawValue: options.positional[2]), target != .camera else {
+        throw CliFailure.usage("volume control is output/input only, got '\(options.positional[2])'")
+    }
+    return target
+}
+
+private func currentDevice(_ source: DeviceSource, target: Target) throws -> MediaDevice {
+    guard let current = source.defaultDevice(for: target) else {
+        throw CliFailure.noDevice("no default \(target.rawValue) device")
+    }
+    return current
+}
+
+private func volumeOf(_ device: MediaDevice, target: Target, source: DeviceSource) throws -> Float {
+    guard let level = source.volume(for: device, target: target) else {
+        throw CliFailure.noDevice("\(device.name) has no \(target.rawValue) volume control")
+    }
+    return level
+}
+
+func runVolumeCommand(_ options: Options, source: DeviceSource) throws -> CommandOutput {
+    guard options.positional.count >= 2 else {
+        throw CliFailure.usage("usage: \(programName) volume <get|set|save|clear|show> [args]")
+    }
+    switch options.positional[1] {
+    case "get":
+        try requirePositionalArguments(options, atMost: 3, usage: "volume get <output|input>")
+        let target = try volumeTarget(options, subcommand: "get")
+        let current = try currentDevice(source, target: target)
+        let level = try volumeOf(current, target: target, source: source)
+        return CommandOutput(lines: ["\(target.rawValue): \(String(format: "%.2f", level))"])
+    case "set":
+        try requirePositionalArguments(options, atMost: 4, usage: "volume set <output|input> <0…1>")
+        try requireRealDeviceContext(options)
+        let target = try volumeTarget(options, subcommand: "set")
+        guard options.positional.count >= 4 else {
+            throw CliFailure.usage("usage: \(programName) volume set <output|input> <0…1>")
+        }
+        guard let level = Float(options.positional[3]), level >= 0, level <= 1 else {
+            throw CliFailure.usage("level must be a number between 0 and 1, got '\(options.positional[3])'")
+        }
+        let current = try currentDevice(source, target: target)
+        _ = try volumeOf(current, target: target, source: source)
+        if options.dryRun {
+            return CommandOutput(
+                lines: ["\(target.rawValue): would set volume to \(String(format: "%.2f", level))"])
+        }
+        let status = source.setVolume(level, for: current, target: target)
+        guard status == noErr else {
+            throw CliFailure.software("failed to set \(target.rawValue) volume: OSStatus \(status)")
+        }
+        return CommandOutput(lines: ["\(target.rawValue): volume set to \(String(format: "%.2f", level))"])
+    case "save":
+        try requirePositionalArguments(options, atMost: 3, usage: "volume save <output|input>")
+        let target = try volumeTarget(options, subcommand: "save")
+        let path = options.levelsPath ?? defaultLevelsPath()
+        let current = try currentDevice(source, target: target)
+        let level = try volumeOf(current, target: target, source: source)
+        if options.dryRun {
+            return CommandOutput(
+                lines: ["\(target.rawValue): would save \(levelPercent(level))% for \(current.name)"])
+        }
+        var document = loadLevelsDocument(path)
+        document.upsert(
+            SavedLevel(
+                uid: current.uid,
+                name: current.name,
+                modelUID: current.modelUID,
+                transport: current.transportClass,
+                level: level,
+                savedAt: currentTimestamp()
+            ),
+            for: target
+        )
+        do {
+            try saveLevelsDocument(document, to: path)
+        } catch {
+            throw CliFailure.software("failed to write saved levels at \(path): \(error)")
+        }
+        if options.levelsPath == nil {
+            DistributedNotificationCenter.default().post(name: levelsChangedNotificationName, object: nil)
+        }
+        return CommandOutput(lines: ["\(target.rawValue): saved \(levelPercent(level))% for \(current.name)"])
+    case "clear":
+        try requirePositionalArguments(options, atMost: 3, usage: "volume clear <output|input>")
+        let target = try volumeTarget(options, subcommand: "clear")
+        let path = options.levelsPath ?? defaultLevelsPath()
+        guard let current = source.defaultDevice(for: target) else {
+            return CommandOutput(lines: ["\(target.rawValue): no current device — nothing to clear"])
+        }
+        var document = loadLevelsDocument(path)
+        let match = savedLevel(
+            for: current,
+            target: target,
+            document: document,
+            connectedUIDs: Set(source.allDevices().map(\.uid))
+        )
+        guard let entry = match.entry else {
+            return CommandOutput(lines: ["\(target.rawValue): no saved level for \(current.name)"])
+        }
+        if options.dryRun {
+            return CommandOutput(
+                lines: ["\(target.rawValue): would clear the saved level for \(current.name)"])
+        }
+        document.remove(uid: entry.uid, for: target)
+        do {
+            try saveLevelsDocument(document, to: path)
+        } catch {
+            throw CliFailure.software("failed to write saved levels at \(path): \(error)")
+        }
+        if options.levelsPath == nil {
+            DistributedNotificationCenter.default().post(name: levelsChangedNotificationName, object: nil)
+        }
+        return CommandOutput(lines: ["\(target.rawValue): cleared saved level for \(current.name)"])
+    case "show":
+        try requirePositionalArguments(options, atMost: 2, usage: "volume show [--json]")
+        let path = options.levelsPath ?? defaultLevelsPath()
+        let document = loadLevelsDocument(path)
+        if options.json {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            guard let data = try? encoder.encode(document) else {
+                throw CliFailure.software("could not serialize the saved levels")
+            }
+            return CommandOutput(lines: [String(decoding: data, as: UTF8.self)])
+        }
+        var lines: [String] = []
+        for target in [Target.output, .input] {
+            let entries = document.entries(for: target).values.sorted { $0.name < $1.name }
+            if entries.isEmpty {
+                lines.append("\(target.rawValue): no saved levels")
+            } else {
+                for entry in entries {
+                    lines.append(
+                        "\(target.rawValue): \(levelPercent(entry.level))% \(entry.name) (\(entry.uid), saved \(entry.savedAt))"
+                    )
+                }
+            }
+        }
+        return CommandOutput(lines: lines)
+    default:
+        throw CliFailure.usage("unknown volume command '\(options.positional[1])' — get, set, save, clear, show")
     }
 }
 
@@ -577,7 +800,9 @@ func runCommand(
             source: source, engine: engine, devices: devices, force: false,
             prioritizationEnabled: prioritizationEnabled
         )
-        let lines = renderPlan(plan, dryRun: options.dryRun)
+        let lines =
+            renderPlan(plan, dryRun: options.dryRun)
+            + planRestoreExtras(plan, source: source, dryRun: options.dryRun, levelsPath: options.levelsPath)
         try performPlan(plan, on: source, dryRun: options.dryRun)
         return CommandOutput(lines: lines)
     default:

@@ -68,6 +68,10 @@ struct MediaDevice: Hashable, Sendable {
     /// AVFoundation device type for camera devices, `nil` for audio. Emitted
     /// by `list --json` as `deviceType`.
     let deviceType: String?
+    /// CoreAudio model UID (`kAudioDevicePropertyModelUID`), `nil` where the
+    /// platform has none. Used by the saved-levels replacement match: a
+    /// defective unit swapped for the same model keeps restoring its level.
+    var modelUID: String? = nil
     let capabilities: Set<Target>
 
     var isManaged: Bool { !transportClass.isSynthetic }
@@ -84,15 +88,62 @@ protocol DeviceSource: Sendable {
     func defaultDevice(for target: Target) -> MediaDevice?
     @discardableResult
     func setDefault(_ device: MediaDevice, target: Target) -> OSStatus
+    /// The device's current 0…1 volume in the target's direction; `nil`
+    /// when the device has no volume control (always for the camera target).
+    func volume(for device: MediaDevice, target: Target) -> Float?
+    /// Writes the 0…1 volume (clamped); the returned OSStatus decides —
+    /// unlike the camera preference, volume writes have a real error channel.
+    @discardableResult
+    func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus
+}
+
+extension DeviceSource {
+    func volume(for device: MediaDevice, target: Target) -> Float? { nil }
+
+    @discardableResult
+    func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
+        OSStatus(paramErr)
+    }
 }
 
 // MARK: - CoreAudio helpers
 
 private func propertyAddress(
     _ selector: AudioObjectPropertySelector,
-    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+    element: AudioObjectPropertyElement = kAudioObjectPropertyElementMain
 ) -> AudioObjectPropertyAddress {
-    AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+    AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: element)
+}
+
+private func getFloat32(
+    _ id: AudioDeviceID,
+    _ selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope,
+    element: AudioObjectPropertyElement
+) -> Float32? {
+    var addr = propertyAddress(selector, scope: scope, element: element)
+    var value: Float32 = 0
+    var size = UInt32(MemoryLayout<Float32>.size)
+    let status = withUnsafeMutablePointer(to: &value) { pointer in
+        AudioObjectGetPropertyData(id, &addr, 0, nil, &size, pointer)
+    }
+    return status == noErr ? value : nil
+}
+
+private func setFloat32(
+    _ value: Float32,
+    _ id: AudioDeviceID,
+    _ selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope,
+    element: AudioObjectPropertyElement
+) -> OSStatus {
+    var addr = propertyAddress(selector, scope: scope, element: element)
+    var scalar = value
+    let size = UInt32(MemoryLayout<Float32>.size)
+    return withUnsafeMutablePointer(to: &scalar) { pointer in
+        AudioObjectSetPropertyData(id, &addr, 0, nil, size, pointer)
+    }
 }
 
 private func getUInt32(
@@ -222,6 +273,63 @@ final class CoreAudioDeviceSource: DeviceSource, @unchecked Sendable {
         }
     }
 
+    /// Volume via `kAudioDevicePropertyVolumeScalar`: the main element when
+    /// the device has one, otherwise the per-channel elements (read: the
+    /// channel average, write: every channel).
+    func volume(for device: MediaDevice, target: Target) -> Float? {
+        switch target {
+        case .camera:
+            return nil
+        case .output, .input:
+            guard let id = audioDeviceID(for: device.uid) else { return nil }
+            let scope: AudioObjectPropertyScope =
+                target == .output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput
+            var main = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope)
+            if AudioObjectHasProperty(id, &main) {
+                return getFloat32(
+                    id, kAudioDevicePropertyVolumeScalar, scope: scope, element: kAudioObjectPropertyElementMain
+                )
+            }
+            let channels = channelCount(id, scope: scope)
+            guard channels > 0 else { return nil }
+            var total: Float32 = 0
+            var found = 0
+            for element in 1...UInt32(channels) {
+                if let value = getFloat32(
+                    id, kAudioDevicePropertyVolumeScalar, scope: scope, element: element
+                ) {
+                    total += value
+                    found += 1
+                }
+            }
+            return found > 0 ? total / Float32(found) : nil
+        }
+    }
+
+    @discardableResult
+    func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
+        guard target != .camera, let id = audioDeviceID(for: device.uid) else { return OSStatus(paramErr) }
+        let scope: AudioObjectPropertyScope =
+            target == .output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput
+        let clamped = min(max(level, 0), 1)
+        var main = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope)
+        if AudioObjectHasProperty(id, &main) {
+            return setFloat32(
+                Float32(clamped), id, kAudioDevicePropertyVolumeScalar, scope: scope,
+                element: kAudioObjectPropertyElementMain
+            )
+        }
+        let channels = channelCount(id, scope: scope)
+        guard channels > 0 else { return OSStatus(paramErr) }
+        for element in 1...UInt32(channels) {
+            let status = setFloat32(
+                Float32(clamped), id, kAudioDevicePropertyVolumeScalar, scope: scope, element: element
+            )
+            guard status == noErr else { return status }
+        }
+        return noErr
+    }
+
     private func writeDefaultDevice(
         _ device: MediaDevice,
         selector: AudioObjectPropertySelector
@@ -257,6 +365,7 @@ final class CoreAudioDeviceSource: DeviceSource, @unchecked Sendable {
             name: name,
             transportClass: transportClass(for: rawTransport),
             deviceType: nil,
+            modelUID: getString(id, kAudioDevicePropertyModelUID),
             capabilities: isOutput && isInput ? [.output, .input] : isOutput ? [.output] : [.input]
         )
     }
@@ -293,9 +402,31 @@ final class SystemDeviceSource: DeviceSource {
         case .camera: return camera.setDefault(device, target: target)
         }
     }
+
+    func volume(for device: MediaDevice, target: Target) -> Float? {
+        switch target {
+        case .output, .input: return audio.volume(for: device, target: target)
+        case .camera: return nil
+        }
+    }
+
+    @discardableResult
+    func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
+        switch target {
+        case .output, .input: return audio.setVolume(level, for: device, target: target)
+        case .camera: return OSStatus(paramErr)
+        }
+    }
 }
 
 // MARK: - Fixture source (headless test seam)
+
+/// Per-direction volume seeds for a fixture device — a seeded direction is
+/// volume-capable, an unseeded one is not.
+struct FixtureVolume: Codable, Equatable, Sendable {
+    let output: Float?
+    let input: Float?
+}
 
 struct FixtureDevice: Codable, Sendable {
     let uid: String
@@ -309,6 +440,11 @@ struct FixtureDevice: Codable, Sendable {
     /// Optional AVFoundation device type string for camera fixtures; decodes
     /// as `nil` for tables that do not model it.
     let deviceType: String?
+    /// Optional CoreAudio model UID; decodes as `nil` for older fixtures.
+    /// Seeds `MediaDevice.modelUID` for the saved-levels replacement match.
+    let modelUID: String?
+    /// Optional volume seeds; decodes as `nil` for older fixtures.
+    let volume: FixtureVolume?
 }
 
 struct FixtureData: Codable, Sendable {
@@ -323,12 +459,15 @@ struct FixtureData: Codable, Sendable {
 /// In-memory device table. The pure initializer takes decoded fixture data;
 /// the `path` convenience is the I/O boundary. Never touches real devices;
 /// `setDefault` only mutates the in-memory current pointers, and the CLI
-/// refuses fixture-mode writes without `--dry-run`.
+/// refuses fixture-mode writes without `--dry-run`. Volume seeds mark a
+/// direction volume-capable; `setVolume` updates the in-memory value (tests
+/// observe the write without hardware).
 final class FixtureDeviceSource: DeviceSource, @unchecked Sendable {
     private let devices: [MediaDevice]
     private let manageSoundEffects: Bool
     private var currentUIDs: [Target: String]
     private var systemOutputUID: String?
+    private var volumes: [Target: [String: Float]]
 
     init(
         devices: [MediaDevice],
@@ -336,7 +475,8 @@ final class FixtureDeviceSource: DeviceSource, @unchecked Sendable {
         defaultInput: String?,
         defaultSystemOutput: String? = nil,
         defaultCamera: String? = nil,
-        manageSoundEffects: Bool = true
+        manageSoundEffects: Bool = true,
+        volumes: [Target: [String: Float]] = [:]
     ) {
         self.devices = devices
         self.manageSoundEffects = manageSoundEffects
@@ -346,6 +486,7 @@ final class FixtureDeviceSource: DeviceSource, @unchecked Sendable {
             .camera: defaultCamera ?? "",
         ]
         systemOutputUID = defaultSystemOutput
+        self.volumes = volumes
     }
 
     convenience init(path: String, manageSoundEffects: Bool = true) throws {
@@ -358,6 +499,7 @@ final class FixtureDeviceSource: DeviceSource, @unchecked Sendable {
                     name: fixtureDevice.name,
                     transportClass: fixtureDevice.transport,
                     deviceType: fixtureDevice.deviceType,
+                    modelUID: fixtureDevice.modelUID,
                     capabilities: Set(
                         Target.allCases.filter { target in
                             switch target {
@@ -373,7 +515,15 @@ final class FixtureDeviceSource: DeviceSource, @unchecked Sendable {
             defaultInput: fixture.defaultInput,
             defaultSystemOutput: fixture.defaultSystemOutput,
             defaultCamera: fixture.defaultCamera,
-            manageSoundEffects: manageSoundEffects
+            manageSoundEffects: manageSoundEffects,
+            volumes: fixture.devices.reduce(into: [Target: [String: Float]]()) { map, fixtureDevice in
+                if let output = fixtureDevice.volume?.output {
+                    map[.output, default: [:]][fixtureDevice.uid] = output
+                }
+                if let input = fixtureDevice.volume?.input {
+                    map[.input, default: [:]][fixtureDevice.uid] = input
+                }
+            }
         )
     }
 
@@ -396,6 +546,18 @@ final class FixtureDeviceSource: DeviceSource, @unchecked Sendable {
         if target == .output, manageSoundEffects {
             systemOutputUID = device.uid
         }
+        return noErr
+    }
+
+    func volume(for device: MediaDevice, target: Target) -> Float? {
+        guard target != .camera else { return nil }
+        return volumes[target]?[device.uid]
+    }
+
+    @discardableResult
+    func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
+        guard target != .camera else { return OSStatus(paramErr) }
+        volumes[target, default: [:]][device.uid] = level
         return noErr
     }
 }

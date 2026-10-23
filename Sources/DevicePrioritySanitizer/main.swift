@@ -131,6 +131,12 @@ func printUsage() {
           status [--json]               Show the switch and per-target managed state
           start                         Start the app (launchd agent when installed, else launch the bundle)
           stop                          Stop the app (boots out the launchd agent; manual instances terminate)
+          volume get <output|input>      Print the current device's volume (0…1)
+          volume set <output|input> <0…1>
+                                        Set the current device's volume live
+          volume save <output|input>    Save the current device's volume as its restore level
+          volume clear <output|input>   Remove the current device's saved restore level
+          volume show [--json]         List saved restore levels
           config                        Open the configuration window (AppKit)
           menu-text                     Print the dropdown as deterministic text (test seam)
 
@@ -160,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let options: Options
     private let configPath: String
     private let statePath: String
+    private let levelsPath: String
     private var config: AppConfig
     private var source: DeviceSource
     private var engine: PriorityEngine
@@ -178,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cameraObservers: [NSObjectProtocol] = []
     private var stateObserver: NSObjectProtocol?
     private var configObserver: NSObjectProtocol?
+    private var levelsObserver: NSObjectProtocol?
     /// Class-property KVO context for `AVCaptureDevice.systemPreferredCamera`.
     private var preferredCameraKVOContext = 0
 
@@ -194,6 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.source = source
         self.engine = engine
         self.statePath = statePath
+        self.levelsPath = options.levelsPath ?? defaultLevelsPath()
         prioritizationEnabled = resolveState(statePath).prioritizationEnabled
         menuController = MenuController(engine: engine, source: source)
         super.init()
@@ -205,6 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let status = self.source.setDefault(device, target: target)
             if status != noErr {
                 logStderr("failed to select \(device.name): OSStatus \(status)")
+            } else {
+                self.restoreLevelAfterActivation(device, target: target)
             }
             self.refreshMenu()
         }
@@ -219,6 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let status = self.source.setDefault(next, target: target)
             if status != noErr {
                 logStderr("failed to cycle \(target.rawValue) to \(next.name): OSStatus \(status)")
+            } else {
+                self.restoreLevelAfterActivation(next, target: target)
             }
             self.refreshMenu()
         }
@@ -236,6 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             do {
                 try performPlan(plan, on: self.source, dryRun: false)
+                for change in plan where change.device != nil && change.current?.uid != change.device?.uid {
+                    self.restoreLevelAfterActivation(change.device!, target: change.target)
+                }
             } catch {
                 logStderr("\(error)")
             }
@@ -252,11 +268,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // resurrect a plain exit; manual instances terminate directly.
             stopAgentFromWithinApp()
         }
+        menuController.onSetVolume = { [weak self] target, level in
+            guard let self, let current = self.source.defaultDevice(for: target) else { return }
+            let status = self.source.setVolume(level, for: current, target: target)
+            if status != noErr {
+                logStderr("failed to set \(target.rawValue) volume for \(current.name): OSStatus \(status)")
+            }
+        }
+        menuController.onSaveLevel = { [weak self] target in
+            self?.saveCurrentLevel(for: target)
+        }
+        menuController.onClearLevel = { [weak self] target in
+            (self?.clearCurrentLevel(for: target)) ?? false
+        }
+        menuController.onLevelState = { [weak self] target in
+            self?.levelRowState(for: target) ?? LevelRowState(deviceName: nil, liveLevel: nil, savedLevel: nil)
+        }
 
         registerListeners()
         registerCameraObservers()
         registerStateObserver()
         registerConfigObserver()
+        registerLevelsObserver()
         reloadAndApply(initial: true)
     }
 
@@ -359,6 +392,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 self.refreshMenu()
             }
+        }
+    }
+
+    /// The CLI posts `levelsChanged` after a `volume save/clear` on the
+    /// default path; the saved-state markers and Clear buttons must follow.
+    private func registerLevelsObserver() {
+        levelsObserver = DistributedNotificationCenter.default().addObserver(
+            forName: levelsChangedNotificationName,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshMenu()
+        }
+    }
+
+    // MARK: Per-device volume levels
+
+    /// The row snapshot for one audio target: the current device, its live
+    /// level, and the stored level that applies to it (exact UID or unique
+    /// replacement match). Camera never reaches here.
+    private func levelRowState(for target: Target) -> LevelRowState {
+        let current = source.defaultDevice(for: target)
+        let match = current.map { savedLevelFor($0, target: target) } ?? .none
+        return LevelRowState(
+            deviceName: current?.name,
+            liveLevel: current.flatMap { source.volume(for: $0, target: target) },
+            savedLevel: match.entry?.level
+        )
+    }
+
+    private func savedLevelFor(_ device: MediaDevice, target: Target) -> LevelMatch {
+        savedLevel(
+            for: device,
+            target: target,
+            document: loadLevelsDocument(levelsPath),
+            connectedUIDs: Set(devices.map(\.uid))
+        )
+    }
+
+    /// Menubar Save: upsert the current device's entry. Returns the saved
+    /// value (the row updates its marker and Clear button), `nil` on failure.
+    private func saveCurrentLevel(for target: Target) -> Float? {
+        guard
+            let current = source.defaultDevice(for: target),
+            let level = source.volume(for: current, target: target)
+        else { return nil }
+        var document = loadLevelsDocument(levelsPath)
+        document.upsert(
+            SavedLevel(
+                uid: current.uid,
+                name: current.name,
+                modelUID: current.modelUID,
+                transport: current.transportClass,
+                level: level,
+                savedAt: currentTimestamp()
+            ),
+            for: target
+        )
+        do {
+            try saveLevelsDocument(document, to: levelsPath)
+        } catch {
+            logStderr("failed to write saved levels at \(levelsPath): \(error)")
+            return nil
+        }
+        return level
+    }
+
+    /// Menubar Clear: removes the entry applying to the current device —
+    /// its exact-UID entry, or the unique replacement entry that restored it.
+    private func clearCurrentLevel(for target: Target) -> Bool {
+        guard let current = source.defaultDevice(for: target) else { return false }
+        var document = loadLevelsDocument(levelsPath)
+        guard let entry = savedLevelFor(current, target: target).entry else { return false }
+        document.remove(uid: entry.uid, for: target)
+        do {
+            try saveLevelsDocument(document, to: levelsPath)
+        } catch {
+            logStderr("failed to write saved levels at \(levelsPath): \(error)")
+            return false
+        }
+        return true
+    }
+
+    /// Restore hook after an activation (menu pick, cycle, reapply,
+    /// auto-selection): applies the device's saved level, best-effort. NOT
+    /// called for an already-current device at startup, nor for external
+    /// default changes — a saved level never overwrites a change the user
+    /// made outside this app's activations.
+    private func restoreLevelAfterActivation(_ device: MediaDevice, target: Target) {
+        let outcome = restoreSavedLevel(
+            device: device,
+            target: target,
+            source: source,
+            document: loadLevelsDocument(levelsPath),
+            connectedUIDs: Set(devices.map(\.uid)),
+            perform: true
+        )
+        switch outcome {
+        case .restored(let level, let replacement):
+            logStderr(
+                "\(target.rawValue): restored saved level \(levelPercent(level))%"
+                    + (replacement ? " (replacement match)" : ""))
+        case .failed(let status):
+            logStderr("failed to restore saved level for \(device.name): OSStatus \(status)")
+        case .noEntry, .unsupported:
+            break
         }
     }
 
@@ -500,6 +639,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard source.defaultDevice(for: target)?.uid != device.uid else { return }
         let status = source.setDefault(device, target: target)
         logStderr("\(target.rawValue): set to \(device.name) (status \(status))")
+        if status == noErr {
+            restoreLevelAfterActivation(device, target: target)
+        }
     }
 
     private func refreshMenu() {
@@ -620,6 +762,21 @@ func main() -> Never {
             finish(try runAgentCommand(.start, options))
         case "stop":
             finish(try runAgentCommand(.stop, options))
+        case "volume":
+            // Volume control needs no tier config — only a device source
+            // (real, or the `--devices` fixture seam).
+            let volumeSource: DeviceSource
+            do {
+                volumeSource = try makeSource(
+                    from: options,
+                    config: AppConfig(outputs: [], inputs: [], fallbackSymbol: nil, debounceMs: nil))
+            } catch let failure as CliFailure {
+                renderFailure(failure)
+            } catch {
+                logStderr("unexpected error: \(error)")
+                exit(EXIT_FAILURE)
+            }
+            finish(try runVolumeCommand(options, source: volumeSource))
         case "config":
             try requirePositionalArguments(options, atMost: 1, usage: "config")
             runConfigUI(options)

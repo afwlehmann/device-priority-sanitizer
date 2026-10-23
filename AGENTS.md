@@ -25,6 +25,8 @@ via plain `swiftc`.
 │ Camera.swift    AVFoundation │
 │ State.swift     runtime      │
 │                 state        │
+│ Levels.swift    saved volume │
+│                 levels       │
 │ Agent.swift     start/stop,  │
 │                 quit, log    │
 │ Priority.swift  pure engine  │
@@ -36,11 +38,12 @@ via plain `swiftc`.
 
 - **Priority.swift is pure** — no I/O; everything takes values and returns
   values. This is what makes the unit tests possible without hardware.
-- **Effects are explicit**: `DeviceSource` abstracts device enumeration and
-  default-device writes. Implementations: `CoreAudioDeviceSource` (audio
-  output/input), `CameraDeviceSource` (AVFoundation cameras),
-  `SystemDeviceSource` (composite routing per target), and
-  `FixtureDeviceSource` (in-memory, loaded from a JSON device table).
+- **Effects are explicit**: `DeviceSource` abstracts device enumeration,
+  default-device writes, and per-device volume reads/writes. Implementations:
+  `CoreAudioDeviceSource` (audio output/input), `CameraDeviceSource`
+  (AVFoundation cameras), `SystemDeviceSource` (composite routing per
+  target), and `FixtureDeviceSource` (in-memory, loaded from a JSON device
+  table).
 - **MediaDevice is keyed by uid** (CoreAudio device UID /
   `AVCaptureDevice.uniqueID`) — numeric ids are a CoreAudio write-mechanics
   detail owned by the audio source.
@@ -71,6 +74,11 @@ via plain `swiftc`.
     auto-selection and `reapply` skip the target, the UI shows a
     "Not auto-managed" row, and the generated Raycast `set-<target>`
     command is omitted. No separate boolean.
+- **Saved volume levels** (see "Saved levels" below): every activation —
+  auto-selection, menu pick, cycle, `reapply`, or the CLI `set`/`cycle` —
+  restores the activated device's saved output/input level. Not restored on
+  startup onto an already-active device, and not on external default changes:
+  a saved level never overwrites a change made outside this app.
 - **Transport classification** (`TransportClass.isSynthetic`) is the single
   place deciding menu visibility and auto-selection eligibility — extending
   to AirPlay-as-managed is a one-place change. Camera transports:
@@ -155,6 +163,76 @@ editor; symbols stay editable in the JSON.
 - Standalone `config` quits after the last window closes; the agent-owned
   window only releases the lock. The AppKit UI is verified manually — no
   GUI automation under the nix sandbox; the pure model is unit-tested.
+
+## Saved levels (per-device volume restore)
+
+Between the device submenus and the Cycle items the dropdown carries two
+custom-view rows (output first, then input — same order as the submenus):
+
+```
+Jabra Evolve 75 SE                       restore     ← device + state label
+[────────────────●────────────────]    Save    Clear   ← live slider + actions
+```
+
+- **Line 1** names the *device* the controls act on (the current default of
+  that target — this is what makes the per-device scope visible), truncated
+  with the full name as tooltip, plus the state label `restore` /
+  `do not restore` — the label spans exactly the two buttons, left-aligned,
+  both the label and the buttons use the small system font.
+- **Line 2** holds the live slider (drag = set the current device's volume;
+  never persisted by dragging) and the `Save`/`Clear` pair. `Save` upserts
+  the current device's entry; `Clear` removes the entry that applies to the
+  shown device and is dimmed when none does — label and Clear state derive
+  from the same lookup that drives restore, so they can never disagree.
+  Button clicks update their own state in place; no menu rebuild while open.
+- **The stored value is visible on the slider**: `LevelSliderCell` draws a
+  small accent tick on the bar at the saved position, so the bare
+  `restore`/`do not restore` label stays unambiguous. The numeric value is
+  also inspectable via `volume show`.
+- Volume rows work regardless of the prioritization switch (manual control,
+  like `set`/`cycle`). No volume row for the camera target.
+
+**Store** (`Levels.swift`): `~/Library/Application Support/device-priority-sanitizer/levels.json`
+(env `DEVICE_PRIORITY_SANITIZER_LEVELS`, CLI `--levels <path>`; atomic write;
+missing/corrupt → warning + empty, never blocks the app). Schema:
+`{schemaVersion: 1, output|input: {<uid>: {uid, name, modelUID?, transport, level, savedAt}}}`.
+Runtime state, deliberately not the HM config (same reasoning as `state.json`).
+
+**Lookup** (`savedLevel`): exact UID first; otherwise — only for entries whose
+own UID is *not currently connected* — a unique entry with the same name and
+(when both sides know one) the same `modelUID` (`kAudioDevicePropertyModelUID`,
+surfaced on `MediaDevice` and in `list --json`). This is the replacement-device
+fallback: a defective unit swapped for the same model keeps restoring its
+level. Two same-name devices with both UIDs connected never cross-apply (the
+gate), ambiguity restores nothing. `Clear` removes the matched entry (exact or
+replacement). Stale entries linger harmlessly — `volume show` inspects them.
+
+**Restore** (`restoreSavedLevel`): applied right after every activation the
+app or CLI performs — auto-selection, menu pick, cycle, `reapply`, CLI
+`set`/`cycle` — best-effort (a failed volume write logs a warning, never
+fails the activation). Explicitly *not* restored: startup onto an
+already-active device, and external default changes (`defaultsChanged` only
+refreshes the menu). Volume I/O goes through the `DeviceSource` seam
+(`kAudioDevicePropertyVolumeScalar`: main element when present, otherwise
+per-channel — read: average, write: every channel; unsupported devices report
+`nil` and render a disabled slider). Unlike the camera preference, volume
+writes have a real error channel, so the OSStatus decides — no read-back
+verification.
+
+**CLI** (`volume …`): `get`/`set` are live (set follows the fixture write
+guard), `save`/`clear`/`show` operate on the store. `save`/`clear` post the
+`levelsChanged` distributed notification on the default path so a running
+agent refreshes; overridden `--levels` paths never poke the live agent. Exit
+codes: 64 invalid target/level/args, 66 no current device or no volume
+control, 70 write failure; `clear` without an entry is idempotent (exit 0).
+Volume commands never load the tier config.
+
+Known limitations: external volume changes while the menu is open are not
+reflected live (rows refresh on the next open via `menuNeedsUpdate`); the row
+UI is verified manually (no GUI automation under the nix sandbox) — the
+lookup, restore, and store logic are unit-tested and the CLI paths run in
+bats against `devices-volumes.json` (volume seeds + model UIDs;
+`levels-exact.json`/`levels-replacement.json`).
 
 ## App lifecycle (start/stop, autostart, Quit, logging)
 
@@ -283,6 +361,11 @@ device-priority-sanitizer disable
 device-priority-sanitizer status [--json]
 device-priority-sanitizer start
 device-priority-sanitizer stop
+device-priority-sanitizer volume get <output|input>
+device-priority-sanitizer volume set <output|input> <0…1>
+device-priority-sanitizer volume save <output|input>
+device-priority-sanitizer volume clear <output|input>
+device-priority-sanitizer volume show [--json]
 device-priority-sanitizer config [--config <path>] [--devices <fixture>] [--state <path>]
 device-priority-sanitizer menu-text        # test seam
 device-priority-sanitizer auto             # hidden test seam

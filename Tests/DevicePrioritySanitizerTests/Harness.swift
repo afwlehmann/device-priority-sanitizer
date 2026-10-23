@@ -43,11 +43,13 @@ func expectEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: String) th
 
 /// Minimal in-memory source for unit tests: deterministic DeviceSource double
 /// with no hash-derived IDs, recording writes so tests can observe effects
-/// without any CoreAudio or AVFoundation dependency.
+/// without any CoreAudio or AVFoundation dependency. Seeded volumes mark a
+/// direction volume-capable (same semantics as the fixture source).
 final class OverlaySource: DeviceSource, @unchecked Sendable {
     private let devices: [MediaDevice]
     private var current: [Target: MediaDevice?]
     private let manageSoundEffects: Bool
+    private var volumes: [Target: [String: Float]]
     private(set) var systemOutput: MediaDevice?
     private(set) var usageCount = 0
 
@@ -57,10 +59,12 @@ final class OverlaySource: DeviceSource, @unchecked Sendable {
         currentInput: String?,
         currentCamera: String? = nil,
         systemOutput: String? = nil,
-        manageSoundEffects: Bool = true
+        manageSoundEffects: Bool = true,
+        volumes: [Target: [String: Float]] = [:]
     ) {
         self.devices = devices
         self.manageSoundEffects = manageSoundEffects
+        self.volumes = volumes
         let byUID = Dictionary(uniqueKeysWithValues: devices.map { ($0.uid, $0) })
         current = [
             .output: currentOutput.flatMap { byUID[$0] },
@@ -85,6 +89,18 @@ final class OverlaySource: DeviceSource, @unchecked Sendable {
         }
         return noErr
     }
+
+    func volume(for device: MediaDevice, target: Target) -> Float? {
+        guard target != .camera else { return nil }
+        return volumes[target]?[device.uid]
+    }
+
+    @discardableResult
+    func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
+        guard target != .camera else { return OSStatus(paramErr) }
+        volumes[target, default: [:]][device.uid] = level
+        return noErr
+    }
 }
 
 // MARK: - Fixtures (fresh values per call — tests stay fully isolated)
@@ -94,7 +110,7 @@ enum Fixtures {
         [
             MediaDevice(
                 uid: "evolve", name: "Jabra Evolve 75 SE", transportClass: .bluetooth, deviceType: nil,
-                capabilities: [.output, .input]),
+                modelUID: "jabra-evolve-75", capabilities: [.output, .input]),
             MediaDevice(
                 uid: "jabra510", name: "Jabra SPEAK 510 USB", transportClass: .usb, deviceType: nil,
                 capabilities: [.output, .input]),
@@ -164,11 +180,12 @@ enum Fixtures {
         input: String?,
         camera: String? = nil,
         systemOutput: String? = nil,
-        manageSoundEffects: Bool = true
+        manageSoundEffects: Bool = true,
+        volumes: [Target: [String: Float]] = [:]
     ) -> OverlaySource {
         OverlaySource(
             devices: devices(), currentOutput: output, currentInput: input, currentCamera: camera,
-            systemOutput: systemOutput, manageSoundEffects: manageSoundEffects
+            systemOutput: systemOutput, manageSoundEffects: manageSoundEffects, volumes: volumes
         )
     }
 }
