@@ -36,7 +36,9 @@ let
         type = lib.types.str;
         description = ''
           SF Symbol shown for this tier: in the menubar slots and next to the
-          matching devices in the dropdown.
+          matching devices in the dropdown. Names come from Apple's SF
+          Symbols catalog (https://developer.apple.com/sf-symbols); an
+          invalid name renders as a missing icon (see the package AGENTS.md).
         '';
       };
     };
@@ -287,7 +289,9 @@ in
       description = ''
         SF Symbols for a current device that matches no tier (but is not a
         synthetic transport — synthetic currents show the dedicated
-        "not managed" glyph instead).
+        "not managed" glyph instead). Names come from Apple's SF Symbols
+        catalog (https://developer.apple.com/sf-symbols); an invalid name
+        renders as a missing icon (see the package AGENTS.md).
       '';
     };
 

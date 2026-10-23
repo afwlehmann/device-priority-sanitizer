@@ -147,6 +147,37 @@ editor; symbols stay editable in the JSON.
   window only releases the lock. The AppKit UI is verified manually — no
   GUI automation under the nix sandbox; the pure model is unit-tested.
 
+## Symbols
+
+`symbol` values (tier entries, `fallbackSymbol`) are SF Symbol names —
+Apple's system icon catalog:
+
+- Catalog + the SF Symbols browsing app:
+  https://developer.apple.com/sf-symbols
+- Human Interface Guidelines overview:
+  https://developer.apple.com/design/human-interface-guidelines/sf-symbols
+
+The SF Symbols app is the reference for names and availability — symbols
+appear in newer macOS releases, and a name resolves against the *running*
+system, so a symbol that only exists on a newer OS behaves like a typo.
+
+An invalid name (e.g. `laptop-foo`) fails silently —
+`NSImage(systemSymbolName:)` returns nil and the damage is partial:
+
+- **Menubar status image**: `statusImage` requires every slot symbol to
+  resolve; one invalid name makes the whole composite nil — no menubar
+  icon at all on launch (or the previous image sticks after a refresh).
+- **Menu and config-window rows**: the row renders without its icon; the
+  text is unaffected.
+- **CLI** (`menu-text`, `list --json`): symbols are opaque strings — the
+  raw name is printed, nothing fails.
+
+Unlike tier regexes there is no fail-fast validation at startup; symbols
+resolve only where they render. Module defaults: `headphones`,
+`hifispeaker.fill`, `laptopcomputer`, `mic`, `speaker.wave.3`, `video`,
+`iphone`, `display`, plus the built-in `questionmark.circle` (excluded
+current) and `pause.circle` (disabled switch).
+
 ## Test seams
 
 - `--devices <file>` injects a `FixtureData` JSON table (see
