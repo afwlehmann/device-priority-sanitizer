@@ -9,6 +9,7 @@ final class ActionPayload: NSObject {
         case togglePrioritization
         case configure
         case settings
+        case quit
     }
 
     let kind: Kind
@@ -25,10 +26,11 @@ final class ActionPayload: NSObject {
 /// (excluded) current device renders the dedicated "not managed" glyph. A
 /// globally disabled switch appends `pause.circle` — the app leaves
 /// everything alone, but says so. The dropdown leads with a checkable
-/// Prioritization item (the master toggle), a Configure Devices… entry, and
-/// greys out Reapply while disabled; manual device picks and Cycle remain
-/// available. `update(engine:source:)` swaps the engine/source after a
-/// configuration save without recreating the status item.
+/// Enabled item (the master toggle), a Configure Devices… entry, and
+/// greys out Reapply while disabled; it ends with a Quit item. Manual
+/// device picks and Cycle remain available. `update(engine:source:)`
+/// swaps the engine/source after a configuration save without recreating
+/// the status item.
 final class MenuController: NSObject {
     private var engine: PriorityEngine
     private var source: DeviceSource
@@ -39,6 +41,7 @@ final class MenuController: NSObject {
     var onReapply: (() -> Void)?
     var onTogglePrioritization: (() -> Void)?
     var onConfigure: (() -> Void)?
+    var onQuit: (() -> Void)?
 
     init(engine: PriorityEngine, source: DeviceSource) {
         self.engine = engine
@@ -112,7 +115,7 @@ final class MenuController: NSObject {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let toggle = NSMenuItem(
-            title: "Prioritization",
+            title: "Enabled",
             action: #selector(handleMenuItem(_:)),
             keyEquivalent: ""
         )
@@ -136,6 +139,8 @@ final class MenuController: NSObject {
         menu.addItem(reapply)
         menu.addItem(makeSubmenu("Configure Devices…", payload: .configure))
         menu.addItem(makeSubmenu("Open Sound Settings", payload: .settings))
+        menu.addItem(.separator())
+        menu.addItem(makeSubmenu("Quit", payload: .quit))
         return menu
     }
 
@@ -234,6 +239,8 @@ final class MenuController: NSObject {
             if let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") {
                 NSWorkspace.shared.open(url)
             }
+        case .quit:
+            onQuit?()
         }
     }
 }

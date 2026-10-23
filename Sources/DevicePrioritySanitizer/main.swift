@@ -223,6 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuController.onConfigure = { [weak self] in
             self?.openConfigWindow()
         }
+        menuController.onQuit = {
+            // Terminates the process. Under the HM launchd agent KeepAlive
+            // immediately relaunches it; a manually launched instance
+            // exits for good.
+            _ = NSApp.terminate(nil)
+        }
 
         registerListeners()
         registerCameraObservers()
