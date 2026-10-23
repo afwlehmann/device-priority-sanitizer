@@ -39,11 +39,11 @@ via plain `swiftc`.
 - **Priority.swift is pure** — no I/O; everything takes values and returns
   values. This is what makes the unit tests possible without hardware.
 - **Effects are explicit**: `DeviceSource` abstracts device enumeration,
-  default-device writes, and per-device volume reads/writes. Implementations:
-  `CoreAudioDeviceSource` (audio output/input), `CameraDeviceSource`
-  (AVFoundation cameras), `SystemDeviceSource` (composite routing per
-  target), and `FixtureDeviceSource` (in-memory, loaded from a JSON device
-  table).
+  default-device writes, per-device volume reads/writes, and volume-change
+  observation. Implementations: `CoreAudioDeviceSource` (audio output/input),
+  `CameraDeviceSource` (AVFoundation cameras), `SystemDeviceSource`
+  (composite routing per target), and `FixtureDeviceSource` (in-memory,
+  loaded from a JSON device table).
 - **MediaDevice is keyed by uid** (CoreAudio device UID /
   `AVCaptureDevice.uniqueID`) — numeric ids are a CoreAudio write-mechanics
   detail owned by the audio source.
@@ -238,6 +238,22 @@ per-channel — read: average, write: every channel; unsupported devices report
 writes have a real error channel, so the OSStatus decides — no read-back
 verification.
 
+**Live sliders** (0.5.0): the displayed level follows external changes
+(System Settings, media keys, other apps) immediately. `DeviceSource
+.observeVolume(of:target:handler:)` registers CoreAudio property listeners
+on the current output and input devices — the rows show exactly those —
+using the same element selection as reads/writes (`volumeElements` is the
+one place deciding all three). The listener block runs on the main queue, so
+the handler re-reads the level and pushes it to the displayed row in place
+(`MenuController.setLiveLevel` — never a menu rebuild, which would disrupt an
+open menu). Listeners are re-registered on every default-device, device-set,
+or config change and after coreaudiod restarts (the service drops
+registrations); removal closures tolerate registrations that died with their
+device. The app's own slider-drag writes echo back as notifications and are
+ignored while the knob is dragging (`LevelSliderControl.isDragging`); the
+trailing push after mouse-up lands harmlessly. Devices that post no volume
+notifications (rare) still refresh on the next menu open.
+
 **CLI** (`volume …`): `get`/`set` are live (set follows the fixture write
 guard), `save`/`clear`/`show` operate on the store. `save`/`clear` post the
 `levelsChanged` distributed notification on the default path so a running
@@ -246,11 +262,11 @@ codes: 64 invalid target/level/args, 66 no current device or no volume
 control, 70 write failure; `clear` without an entry is idempotent (exit 0).
 Volume commands never load the tier config.
 
-Known limitations: external volume changes while the menu is open are not
-reflected live (rows refresh on the next open via `menuNeedsUpdate`); the row
-UI is verified manually (no GUI automation under the nix sandbox) — the
-lookup, restore, and store logic are unit-tested and the CLI paths run in
-bats against `devices-volumes.json` (volume seeds + model UIDs;
+Known limitations: devices that post no volume notifications (rare) refresh
+on the next menu open instead of live; the row UI is verified manually (no
+GUI automation under the nix sandbox) — the lookup, restore, and store
+logic are unit-tested and the CLI paths run in bats against
+`devices-volumes.json` (volume seeds + model UIDs;
 `levels-exact.json`/`levels-replacement.json`).
 
 ## App lifecycle (start/stop, autostart, Quit, logging)

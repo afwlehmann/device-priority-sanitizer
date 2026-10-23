@@ -95,6 +95,15 @@ protocol DeviceSource: Sendable {
     /// unlike the camera preference, volume writes have a real error channel.
     @discardableResult
     func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus
+    /// Starts observing the device's volume in the target's direction; the
+    /// handler runs on the main queue. Returns a cancellation closure, or
+    /// `nil` when the device has no volume control or the source does not
+    /// observe (fixtures, cameras).
+    func observeVolume(
+        of device: MediaDevice,
+        target: Target,
+        handler: @escaping () -> Void
+    ) -> (() -> Void)?
 }
 
 extension DeviceSource {
@@ -103,6 +112,15 @@ extension DeviceSource {
     @discardableResult
     func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
         OSStatus(paramErr)
+    }
+
+    /// Sources without hardware observation (fixtures, cameras) report none.
+    func observeVolume(
+        of device: MediaDevice,
+        target: Target,
+        handler: @escaping () -> Void
+    ) -> (() -> Void)? {
+        nil
     }
 }
 
@@ -190,6 +208,20 @@ private func channelCount(_ device: AudioDeviceID, scope: AudioObjectPropertySco
     let status = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, bufferList)
     guard status == noErr else { return 0 }
     return UnsafeMutableAudioBufferListPointer(bufferList).reduce(0) { $0 + Int($1.mNumberChannels) }
+}
+
+/// The volume elements of a device in one scope: the main element when the
+/// device has one, otherwise every channel element — the single place
+/// deciding volume reads, writes, AND observation, so the three can never
+/// diverge.
+private func volumeElements(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> [AudioObjectPropertyElement] {
+    var main = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope)
+    if AudioObjectHasProperty(id, &main) {
+        return [kAudioObjectPropertyElementMain]
+    }
+    let channels = channelCount(id, scope: scope)
+    guard channels > 0 else { return [] }
+    return (1...UInt32(channels)).map { $0 }
 }
 
 /// 'blue' — kAudioDeviceTransportTypeBluetoothA2DP is not exported to Swift
@@ -282,19 +314,12 @@ final class CoreAudioDeviceSource: DeviceSource, @unchecked Sendable {
             return nil
         case .output, .input:
             guard let id = audioDeviceID(for: device.uid) else { return nil }
-            let scope: AudioObjectPropertyScope =
-                target == .output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput
-            var main = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope)
-            if AudioObjectHasProperty(id, &main) {
-                return getFloat32(
-                    id, kAudioDevicePropertyVolumeScalar, scope: scope, element: kAudioObjectPropertyElementMain
-                )
-            }
-            let channels = channelCount(id, scope: scope)
-            guard channels > 0 else { return nil }
+            let scope = Self.audioScope(for: target)
+            let elements = volumeElements(id, scope: scope)
+            guard !elements.isEmpty else { return nil }
             var total: Float32 = 0
             var found = 0
-            for element in 1...UInt32(channels) {
+            for element in elements {
                 if let value = getFloat32(
                     id, kAudioDevicePropertyVolumeScalar, scope: scope, element: element
                 ) {
@@ -309,25 +334,52 @@ final class CoreAudioDeviceSource: DeviceSource, @unchecked Sendable {
     @discardableResult
     func setVolume(_ level: Float, for device: MediaDevice, target: Target) -> OSStatus {
         guard target != .camera, let id = audioDeviceID(for: device.uid) else { return OSStatus(paramErr) }
-        let scope: AudioObjectPropertyScope =
-            target == .output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput
+        let scope = Self.audioScope(for: target)
         let clamped = min(max(level, 0), 1)
-        var main = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope)
-        if AudioObjectHasProperty(id, &main) {
-            return setFloat32(
-                Float32(clamped), id, kAudioDevicePropertyVolumeScalar, scope: scope,
-                element: kAudioObjectPropertyElementMain
-            )
-        }
-        let channels = channelCount(id, scope: scope)
-        guard channels > 0 else { return OSStatus(paramErr) }
-        for element in 1...UInt32(channels) {
+        let elements = volumeElements(id, scope: scope)
+        guard !elements.isEmpty else { return OSStatus(paramErr) }
+        for element in elements {
             let status = setFloat32(
                 Float32(clamped), id, kAudioDevicePropertyVolumeScalar, scope: scope, element: element
             )
             guard status == noErr else { return status }
         }
         return noErr
+    }
+
+    /// Live volume observation: one listener block shared by all element
+    /// registrations (CoreAudio retains it until the matching removal; the
+    /// cancel closure keeps the identity stable). The block runs on the main
+    /// queue, so the handler may touch AppKit directly.
+    func observeVolume(
+        of device: MediaDevice,
+        target: Target,
+        handler: @escaping () -> Void
+    ) -> (() -> Void)? {
+        guard target != .camera, let id = audioDeviceID(for: device.uid) else { return nil }
+        let scope = Self.audioScope(for: target)
+        let elements = volumeElements(id, scope: scope)
+        guard !elements.isEmpty else { return nil }
+        let listener: AudioObjectPropertyListenerBlock = { _, _ in handler() }
+        for element in elements {
+            var address = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope, element: element)
+            let status = AudioObjectAddPropertyListenerBlock(id, &address, DispatchQueue.main, listener)
+            if status != noErr {
+                logStderr("warning: volume listener for element \(element) failed: OSStatus \(status)")
+            }
+        }
+        return {
+            for element in elements {
+                var address = propertyAddress(kAudioDevicePropertyVolumeScalar, scope: scope, element: element)
+                // Removing a registration that died with its device is a
+                // harmless no-op error — ignore.
+                AudioObjectRemovePropertyListenerBlock(id, &address, DispatchQueue.main, listener)
+            }
+        }
+    }
+
+    private static func audioScope(for target: Target) -> AudioObjectPropertyScope {
+        target == .output ? kAudioObjectPropertyScopeOutput : kAudioObjectPropertyScopeInput
     }
 
     private func writeDefaultDevice(
@@ -415,6 +467,19 @@ final class SystemDeviceSource: DeviceSource {
         switch target {
         case .output, .input: return audio.setVolume(level, for: device, target: target)
         case .camera: return OSStatus(paramErr)
+        }
+    }
+
+    func observeVolume(
+        of device: MediaDevice,
+        target: Target,
+        handler: @escaping () -> Void
+    ) -> (() -> Void)? {
+        switch target {
+        case .output, .input:
+            return audio.observeVolume(of: device, target: target, handler: handler)
+        case .camera:
+            return nil
         }
     }
 }

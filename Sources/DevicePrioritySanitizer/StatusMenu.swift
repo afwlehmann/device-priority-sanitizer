@@ -41,6 +41,10 @@ final class MenuController: NSObject {
     private let dropdown = NSMenu()
     private var devicesSnapshot: [MediaDevice] = []
     private var prioritizationEnabledSnapshot = true
+    /// The level rows of the last populate — the live-level push updates
+    /// them in place instead of rebuilding (an open menu must not be
+    /// disrupted).
+    private var levelRows: [Target: LevelRowView] = [:]
 
     /// Targets that carry a volume row, in dropdown order ("same order as
     /// the items above": output first, then input).
@@ -103,6 +107,14 @@ final class MenuController: NSObject {
         populate(dropdown)
     }
 
+    /// Live level push from the volume property listener: updates the
+    /// displayed row in place — a menu rebuild would disrupt an open menu.
+    /// When the menu is closed the cached row is updated harmlessly; the
+    /// next open re-populates from fresh reads anyway.
+    func setLiveLevel(_ level: Float, for target: Target) {
+        levelRows[target]?.setLiveLevel(level)
+    }
+
     // MARK: - Status image
 
     static func statusImage(symbols: [(symbol: String, description: String)]) -> NSImage? {
@@ -154,11 +166,14 @@ final class MenuController: NSObject {
             .map { addTargetSubmenu($0, to: menu, devices: devicesSnapshot) }
             .forEach { menu.addItem($0) }
         menu.addItem(.separator())
+        levelRows = [:]
         for target in Self.levelTargets {
             let state =
                 onLevelState?(target) ?? LevelRowState(deviceName: nil, liveLevel: nil, savedLevel: nil)
+            let rowView = LevelRowView(target: target, state: state, menuController: self)
+            levelRows[target] = rowView
             let row = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-            row.view = LevelRowView(target: target, state: state, menuController: self)
+            row.view = rowView
             menu.addItem(row)
         }
         menu.addItem(.separator())
@@ -333,6 +348,10 @@ final class LevelSliderControl: NSControl {
         didSet { needsDisplay = true }
     }
 
+    /// True while the user is dragging the knob — external level pushes are
+    /// ignored so an echoed notification cannot fight the drag.
+    private(set) var isDragging = false
+
     private let knobRadius: CGFloat = 5
     private let trackHeight: CGFloat = 4
 
@@ -379,14 +398,19 @@ final class LevelSliderControl: NSControl {
     // MARK: Interaction
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        isDragging = true
         updateLevel(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard isEnabled else { return }
+        isDragging = true
         updateLevel(with: event)
     }
 
     override func mouseUp(with event: NSEvent) {
+        isDragging = false
         updateLevel(with: event)
     }
 
@@ -598,6 +622,13 @@ final class LevelRowView: NSView {
         restoreLabel.stringValue = level == nil ? "do not restore" : "restore"
         clearButton.isEnabled = level != nil
         slider.savedLevel = level
+    }
+
+    /// External level push (volume property listener). Ignored while the
+    /// user is dragging — our own writes echo back as notifications.
+    func setLiveLevel(_ level: Float) {
+        guard !slider.isDragging else { return }
+        slider.level = level
     }
 
     @objc private func sliderMoved() {

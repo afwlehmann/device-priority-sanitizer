@@ -186,6 +186,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var stateObserver: NSObjectProtocol?
     private var configObserver: NSObjectProtocol?
     private var levelsObserver: NSObjectProtocol?
+    /// Volume observation for the current output/input devices — the rows
+    /// show exactly those. Cancel closures from `DeviceSource.observeVolume`.
+    private var volumeListenerCancels: [() -> Void] = []
     /// Class-property KVO context for `AVCaptureDevice.systemPreferredCamera`.
     private var preferredCameraKVOContext = 0
 
@@ -593,6 +596,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func defaultsChanged() {
+        // The rows may now show different devices — observe those instead.
+        refreshVolumeListeners()
         refreshMenu()
     }
 
@@ -617,6 +622,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 applyAuto(target: target)
             }
         }
+        // Covers startup, config reloads, device-set changes, and service
+        // restarts — CoreAudio drops volume listeners when coreaudiod
+        // restarts, and a changed device set may have changed the defaults.
+        refreshVolumeListeners()
         refreshMenu()
     }
 
@@ -646,6 +655,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshMenu() {
         menuController.update(devices: devices, prioritizationEnabled: prioritizationEnabled)
+    }
+
+    // MARK: Live volume observation
+
+    /// Registers volume property listeners for the current output and input
+    /// devices — the level rows show exactly those. Re-run on every
+    /// default-device or device-set change and after coreaudiod restarts.
+    private func refreshVolumeListeners() {
+        volumeListenerCancels.forEach { $0() }
+        volumeListenerCancels = []
+        for target in [Target.output, .input] {
+            guard let current = source.defaultDevice(for: target) else { continue }
+            if let cancel = source.observeVolume(
+                of: current,
+                target: target,
+                handler: { [weak self] in self?.volumeChanged(target: target) }
+            ) {
+                volumeListenerCancels.append(cancel)
+            }
+        }
+    }
+
+    /// A volume property changed on an observed device — including echoes
+    /// of the app's own writes. Re-read the level (channel-wise devices stay
+    /// consistent) and push it to the displayed row in place; the row
+    /// ignores pushes while its knob is being dragged.
+    private func volumeChanged(target: Target) {
+        guard
+            let current = source.defaultDevice(for: target),
+            let level = source.volume(for: current, target: target)
+        else { return }
+        menuController.setLiveLevel(level, for: target)
     }
 }
 
