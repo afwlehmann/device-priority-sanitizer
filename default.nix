@@ -6,7 +6,7 @@
 
 pkgs.stdenv.mkDerivation {
   pname = "device-priority-sanitizer";
-  version = "0.6.0";
+  version = "0.6.1";
 
   # Focused source: only what the build consumes — tests and docs live in the
   # repo but must not change the package hash.
