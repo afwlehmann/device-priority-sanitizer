@@ -428,13 +428,24 @@ final class LevelRowView: NSView {
     private static let buttonGap: CGFloat = 6
     /// Exactly spans Save + gap + Clear; the state label shares this width.
     private static let rightColumnWidth: CGFloat = saveWidth + buttonGap + clearWidth
-    /// The standard `NSMenu` item text gutter: regular items draw their
-    /// titles at this offset from the leading edge of a custom item view —
-    /// AppKit does NOT apply it to `NSMenuItem.view` content, so the row
-    /// must pad by it to line up with the other menu items. No public API
-    /// exposes the value; it is a measured constant, adjusted in this one
-    /// place if a macOS release changes the gutter.
-    private static let textInset: CGFloat = 16
+    /// AppKit's menu-item title origin: `NSMenuItem.view` content is NOT
+    /// inset by the state/title gutter that regular items draw, so the row
+    /// pads by the title origin itself. Derived from AppKit's public menu
+    /// item cell (`NSMenuItemCell.titleRect(forBounds:)`), not a tuned
+    /// constant — the representative item mirrors the main menu (state
+    /// column reserved, no image), so a macOS gutter change follows along.
+    private static let textInset: CGFloat = {
+        let cell = NSMenuItemCell(textCell: "")
+        let representative = NSMenuItem(title: "Representative", action: nil, keyEquivalent: "")
+        representative.state = .on
+        cell.menuItem = representative
+        cell.calcSize()
+        let inset = cell.titleRect(forBounds: NSRect(x: 0, y: 0, width: rowWidth, height: 22)).minX
+        if ProcessInfo.processInfo.environment["DPS_DEBUG_LAYOUT"] != nil {
+            logStderr("debug layout: derived menu text inset \(inset)")
+        }
+        return inset
+    }()
 
     init(target: Target, state: LevelRowState, menuController: MenuController) {
         self.target = target

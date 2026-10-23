@@ -185,6 +185,12 @@ Jabra Evolve 75 SE                       restore     ← device + state label
   shown device and is dimmed when none does — label and Clear state derive
   from the same lookup that drives restore, so they can never disagree.
   Button clicks update their own state in place; no menu rebuild while open.
+- **Row content aligns with the menu items' text**: AppKit does not inset
+  `NSMenuItem.view` content by the state/title gutter, so the row pads by
+  AppKit's own title origin, derived at runtime from
+  `NSMenuItemCell.titleRect(forBounds:)` (26 pt on current macOS: state
+  column + padding) — no hand-tuned constant; a macOS gutter change follows
+  along. `DPS_DEBUG_LAYOUT=1` logs the derived value at first menu build.
 - **The stored value is visible on the slider**: the custom-drawn
   `LevelSliderControl` marks the saved position with a small accent tick on
   its track, so the bare `restore`/`do not restore` label stays unambiguous.
