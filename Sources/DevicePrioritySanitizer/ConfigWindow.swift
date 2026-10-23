@@ -6,7 +6,7 @@ import Foundation
 // The window opens writable or read-only. Read-only reasons (shown in the
 // banner): the config is a Home Manager store symlink, or another editable
 // window holds the advisory lock. Read-only mode disables every mutation —
-// drag/drop, Save — but keeps Revert/Reveal/Reload usable for inspection.
+// drag/drop, Save — but keeps Revert/Reveal-in-Finder/Reload usable for inspection.
 
 struct ConfigEditability: Sendable {
     let isEditable: Bool
@@ -268,7 +268,7 @@ final class ConfigWindowController: NSWindowController, NSWindowDelegate {
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let revertButton = NSButton(title: "Revert", target: nil, action: nil)
     private let reloadButton = NSButton(title: "Reload", target: nil, action: nil)
-    private let revealButton = NSButton(title: "Reveal", target: nil, action: nil)
+    private let revealButton = NSButton(title: "Reveal in Finder", target: nil, action: nil)
 
     init(
         configPath: String,
