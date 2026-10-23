@@ -416,6 +416,7 @@ final class LevelRowView: NSView {
     private let target: Target
     private weak var menuController: MenuController?
     private let deviceLabel: NSTextField
+    private let suffixLabel: NSTextField
     private let restoreLabel: NSTextField
     private let slider: LevelSliderControl
     private let saveButton: NSButton
@@ -450,6 +451,16 @@ final class LevelRowView: NSView {
         return inset
     }()
 
+    /// Row target marker: distinguishes the output and input rows when both
+    /// show the same device (a headset used for both directions).
+    private static func suffix(for target: Target) -> String {
+        switch target {
+        case .output: return "(out)"
+        case .input: return "(in)"
+        case .camera: return ""
+        }
+    }
+
     init(target: Target, state: LevelRowState, menuController: MenuController) {
         self.target = target
         self.menuController = menuController
@@ -457,6 +468,10 @@ final class LevelRowView: NSView {
         deviceLabel = NSTextField(labelWithString: "")
         deviceLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         deviceLabel.lineBreakMode = .byTruncatingTail
+
+        suffixLabel = NSTextField(labelWithString: Self.suffix(for: target))
+        suffixLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        suffixLabel.textColor = .secondaryLabelColor
 
         restoreLabel = NSTextField(labelWithString: "")
         restoreLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -476,7 +491,9 @@ final class LevelRowView: NSView {
         slider.action = #selector(sliderMoved)
         saveButton.target = self
         clearButton.target = self
-        [deviceLabel, restoreLabel, slider, saveButton, clearButton].forEach { addSubview($0) }
+        [deviceLabel, suffixLabel, restoreLabel, slider, saveButton, clearButton].forEach {
+            addSubview($0)
+        }
         layoutFrames()
         apply(state)
     }
@@ -526,7 +543,19 @@ final class LevelRowView: NSView {
         let leftX = max(0, Self.textInset - frame.minX)
         let rightX = bounds.width - Self.rightColumnWidth - 4
         let leftWidth = rightX - leftX - 2
-        deviceLabel.frame = NSRect(x: leftX, y: 26, width: leftWidth, height: 14)
+        // Line 1: the device name truncates, but the target suffix is its
+        // own label hugging the name — a long name ellipsizes *before* the
+        // suffix, so the (out)/(in) marker always stays visible.
+        let suffixWidth = suffixLabel.intrinsicContentSize.width.rounded(.up)
+        let maxNameWidth = max(0, leftWidth - suffixWidth - 4)
+        let nameWidth = min(
+            (deviceLabel.stringValue as NSString)
+                .size(withAttributes: [.font: deviceLabel.font ?? .systemFont(ofSize: NSFont.smallSystemFontSize)])
+                .width.rounded(.up),
+            maxNameWidth
+        )
+        deviceLabel.frame = NSRect(x: leftX, y: 26, width: nameWidth, height: 14)
+        suffixLabel.frame = NSRect(x: leftX + nameWidth + 4, y: 26, width: suffixWidth, height: 14)
         restoreLabel.frame = NSRect(x: rightX, y: 26, width: Self.rightColumnWidth, height: 14)
         slider.frame = NSRect(x: leftX, y: 0, width: leftWidth, height: 20)
         saveButton.frame = NSRect(x: rightX, y: 0, width: Self.saveWidth, height: 20)
@@ -552,6 +581,9 @@ final class LevelRowView: NSView {
         slider.savedLevel = state.savedLevel
         saveButton.isEnabled = hasVolume
         applySavedLevel(state.savedLevel)
+        // The name's measured width feeds the suffix placement — relayout
+        // whenever the device (name) changes.
+        layoutFrames()
     }
 
     private func applySavedLevel(_ level: Float?) {

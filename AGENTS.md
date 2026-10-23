@@ -176,9 +176,12 @@ Jabra Evolve 75 SE                       restore     ← device + state label
 
 - **Line 1** names the *device* the controls act on (the current default of
   that target — this is what makes the per-device scope visible), truncated
-  with the full name as tooltip, plus the state label `restore` /
-  `do not restore` — the label spans exactly the two buttons, left-aligned,
-  both the label and the buttons use the small system font.
+  with the full name as tooltip, followed by a fixed `(out)` / `(in)` target
+  suffix in secondary color — a *separate* label hugging the name, so a long
+  name ellipsizes before it (a headset used as both output and input would
+  otherwise make the rows indistinguishable) — plus the state label
+  `restore` / `do not restore` — that label spans exactly the two buttons,
+  left-aligned, and the labels and buttons use the small system font.
 - **Line 2** holds the live slider (drag = set the current device's volume;
   never persisted by dragging) and the `Save`/`Clear` pair. `Save` upserts
   the current device's entry; `Clear` removes the entry that applies to the
