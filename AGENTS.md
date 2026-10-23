@@ -170,24 +170,27 @@ Between the device submenus and the Cycle items the dropdown carries two
 custom-view rows (output first, then input — same order as the submenus):
 
 ```
-Jabra Evolve 75 SE                       restore     ← device + state label
-[────────────────●────────────────]    Save    Clear   ← live slider + actions
+Jabra SPEAK 510 USB           (out)         restore    ← name + suffix + state label
+[──────────────●──────────────]        Save    Clear    ← live slider + actions
 ```
 
 - **Line 1** names the *device* the controls act on (the current default of
   that target — this is what makes the per-device scope visible), truncated
-  with the full name as tooltip, followed by a fixed `(out)` / `(in)` target
-  suffix in secondary color — a *separate* label hugging the name, so a long
-  name ellipsizes before it (a headset used as both output and input would
-  otherwise make the rows indistinguishable) — plus the state label
-  `restore` / `do not restore` — that label spans exactly the two buttons,
-  left-aligned, and the labels and buttons use the small system font.
+  with the full name as tooltip, plus a fixed `(out)` / `(in)` target suffix
+  in secondary color (a headset used as both output and input would otherwise
+  make the rows indistinguishable). The suffix is a *separate* label
+  right-aligned on the slider's right edge, so a long name ellipsizes before
+  it and the marker never disappears. The state label `restore` /
+  `do not restore` spans exactly the two buttons, left-aligned, and the
+  labels and buttons use the small system font.
 - **Line 2** holds the live slider (drag = set the current device's volume;
-  never persisted by dragging) and the `Save`/`Clear` pair. `Save` upserts
-  the current device's entry; `Clear` removes the entry that applies to the
-  shown device and is dimmed when none does — label and Clear state derive
-  from the same lookup that drives restore, so they can never disagree.
-  Button clicks update their own state in place; no menu rebuild while open.
+  never persisted by dragging) and the `Save`/`Clear` pair — the slider ends
+  12 pt before the right column, giving the actions their own visual space
+  without widening the row. `Save` upserts the current device's entry;
+  `Clear` removes the entry that applies to the shown device and is dimmed
+  when none does — label and Clear state derive from the same lookup that
+  drives restore, so they can never disagree. Button clicks update their own
+  state in place; no menu rebuild while open.
 - **Row content aligns with the menu items' text**: AppKit does not inset
   `NSMenuItem.view` content by the state/title gutter, so the row pads by
   AppKit's own title origin, derived at runtime from

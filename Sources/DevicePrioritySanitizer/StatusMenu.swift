@@ -427,6 +427,12 @@ final class LevelRowView: NSView {
     private static let saveWidth: CGFloat = 48
     private static let clearWidth: CGFloat = 56
     private static let buttonGap: CGFloat = 6
+    /// Space between the slider's right edge and the right-hand column
+    /// (state label over Save/Clear). The slider narrows to provide it —
+    /// the row width (and with it the menu) stays fixed.
+    private static let sliderRightGap: CGFloat = 12
+    /// Space between the device name and the right-aligned target suffix.
+    private static let nameSuffixGap: CGFloat = 4
     /// Exactly spans Save + gap + Clear; the state label shares this width.
     private static let rightColumnWidth: CGFloat = saveWidth + buttonGap + clearWidth
     /// AppKit's menu-item title origin, counted from the item rect origin:
@@ -538,16 +544,18 @@ final class LevelRowView: NSView {
     /// (device name over the slider) fills the remainder. The left column
     /// starts at the menu's title grid: the cell metric counts from the item
     /// rect's origin, while this view sits at the menu's content origin, so
-    /// the view's own x within its superview is subtracted.
+    /// the view's own x within its superview is subtracted. The slider ends
+    /// `sliderRightGap` before the right column, and the target suffix is
+    /// right-aligned on the slider's right edge.
     private func layoutFrames() {
         let leftX = max(0, Self.textInset - frame.minX)
         let rightX = bounds.width - Self.rightColumnWidth - 4
-        let leftWidth = rightX - leftX - 2
-        // Line 1: the device name truncates, but the target suffix is its
-        // own label hugging the name — a long name ellipsizes *before* the
-        // suffix, so the (out)/(in) marker always stays visible.
+        let sliderRightX = rightX - Self.sliderRightGap
+        // Line 1: the device name truncates before the right-aligned
+        // (out)/(in) suffix — a long name ellipsizes, the marker never
+        // disappears, and its right edge sits on the slider's right edge.
         let suffixWidth = suffixLabel.intrinsicContentSize.width.rounded(.up)
-        let maxNameWidth = max(0, leftWidth - suffixWidth - 4)
+        let maxNameWidth = max(0, sliderRightX - leftX - suffixWidth - Self.nameSuffixGap)
         let nameWidth = min(
             (deviceLabel.stringValue as NSString)
                 .size(withAttributes: [.font: deviceLabel.font ?? .systemFont(ofSize: NSFont.smallSystemFontSize)])
@@ -555,9 +563,9 @@ final class LevelRowView: NSView {
             maxNameWidth
         )
         deviceLabel.frame = NSRect(x: leftX, y: 26, width: nameWidth, height: 14)
-        suffixLabel.frame = NSRect(x: leftX + nameWidth + 4, y: 26, width: suffixWidth, height: 14)
+        suffixLabel.frame = NSRect(x: sliderRightX - suffixWidth, y: 26, width: suffixWidth, height: 14)
         restoreLabel.frame = NSRect(x: rightX, y: 26, width: Self.rightColumnWidth, height: 14)
-        slider.frame = NSRect(x: leftX, y: 0, width: leftWidth, height: 20)
+        slider.frame = NSRect(x: leftX, y: 0, width: sliderRightX - leftX, height: 20)
         saveButton.frame = NSRect(x: rightX, y: 0, width: Self.saveWidth, height: 20)
         clearButton.frame = NSRect(
             x: rightX + Self.saveWidth + Self.buttonGap, y: 0, width: Self.clearWidth, height: 20)
