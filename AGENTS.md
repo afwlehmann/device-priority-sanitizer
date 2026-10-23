@@ -501,10 +501,11 @@ device-priority-sanitizer auto             # hidden test seam
 - CI (`.github/workflows/ci.yml`): macOS Tahoe runner (`macos-26`), Nix via
   DeterminateSystems installer + magic-nix-cache, runs `nix flake check` on
   push/PR/tags.
-- Release process: bump the version in exactly three places (`default.nix`
-  `version`, `Sources/DevicePrioritySanitizer/Command.swift`
-  `programVersion`, `Info.plist` `CFBundleShortVersionString`), commit with a
-  conventional message, and tag an annotated `vX.Y.Z`.
+- Release process: bump the version in exactly two places
+  (`Sources/DevicePrioritySanitizer/Command.swift` `programVersion` and
+  `Info.plist` `CFBundleShortVersionString`; the nix package reads its
+  `version` from Info.plist), commit with a conventional message, and tag an
+  annotated `vX.Y.Z`.
 - History note: this repo was extracted from a private config repository;
   `git-filter-repo` preserved the full app history, including the
   pre-rename `audio-priority-sanitizer` era and the Home Manager module

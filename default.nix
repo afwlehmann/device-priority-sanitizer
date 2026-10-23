@@ -4,9 +4,15 @@
   swift,
 }:
 
+let
+  # Single source of truth: the version lives in the bundle's Info.plist
+  # (CFBundleShortVersionString) and the derivation reads it from there.
+  version = builtins.elemAt (lib.strings.splitString "<" (builtins.elemAt (lib.strings.splitString ">" (builtins.elemAt (lib.strings.splitString "<key>CFBundleShortVersionString</key>" (builtins.readFile ./Info.plist)) 1)) 1)) 0;
+in
+
 pkgs.stdenv.mkDerivation {
   pname = "device-priority-sanitizer";
-  version = "0.6.1";
+  inherit version;
 
   # Focused source: only what the build consumes — tests and docs live in the
   # repo but must not change the package hash.
