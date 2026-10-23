@@ -1,5 +1,7 @@
 # Device Priority Sanitizer
 
+![](docs/menubar.png)
+
 ![CI](https://github.com/afwlehmann/device-priority-sanitizer/actions/workflows/ci.yml/badge.svg)
 
 Keeps your speaker, microphone, and camera on the device you actually want —
