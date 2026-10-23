@@ -38,7 +38,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: Evaluate the flake
         run: nix flake check --no-build
       - name: pre-commit hooks (nixfmt, shellcheck, shfmt)
@@ -54,7 +54,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: Build the package
         run: nix develop -c nix build .#default --print-build-logs
 
@@ -66,7 +66,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: Unit tests
         run: nix develop -c nix build .#checks.${{ needs.system.outputs.system }}.unit --print-build-logs
 
@@ -78,6 +78,6 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
         with:
           flakehub: false
-      - uses: DeterminateSystems/magic-nix-cache-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
       - name: CLI integration tests
         run: nix develop -c nix build .#checks.${{ needs.system.outputs.system }}.cli --print-build-logs
