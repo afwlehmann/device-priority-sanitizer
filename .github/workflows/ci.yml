@@ -24,3 +24,22 @@ jobs:
           flakehub: false
       - name: Build and test
         run: nix flake check --print-build-logs --keep-going
+
+  package:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the installer
+        run: ./scripts/package-macos.sh
+      - name: Verify the installer checksum
+        run: (cd dist && shasum -a 256 -c *.sha256)
+      - name: Install and exercise the CLI
+        run: |
+          sudo installer -pkg dist/*.pkg -target /
+          test -d "/Applications/Device Priority Sanitizer.app"
+          codesign --verify --strict "/Applications/Device Priority Sanitizer.app"
+          test -L /usr/local/bin/device-priority-sanitizer
+          test -x /usr/local/bin/device-priority-sanitizer
+          /usr/local/bin/device-priority-sanitizer --help >/dev/null
+          /usr/local/bin/device-priority-sanitizer stop
+          /usr/local/bin/device-priority-sanitizer start --dry-run | grep -q "would launch /Applications/Device Priority Sanitizer.app"

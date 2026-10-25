@@ -453,14 +453,16 @@ device-priority-sanitizer auto             # hidden test seam
 
 ## Packaging
 
-- `default.nix` — plain `swiftc -O` build (NOT SwiftPM, see above), minimal
-  `.app` bundle (`Info.plist`, `LSUIElement`), Raycast wrappers with
+- `default.nix` — plain `swiftc -O -target arm64-apple-macos26.0` build (NOT
+  SwiftPM, see above), minimal `.app` bundle (`Info.plist`, `LSUIElement`),
+  Raycast wrappers with
   `@bash@`/`@cli@` placeholders (`reapply`, `cycle-output`, `cycle-input`,
   `cycle-camera`, `configure`). The package source is a focused fileset
   (`Sources/`, `raycast/`, `Info.plist`) — tests and docs must not change
   the package hash. Signing relies on the nixpkgs darwin toolchain's ad-hoc
   signature — no `/usr/bin/codesign` call; the bundle itself needs no
-  signature because the launchd wrapper execs the binary directly.
+  signature because the launchd wrapper execs the binary directly. The
+  bundle declares macOS 26 (Tahoe) as the minimum system version.
 - Consumed by `nix/home-manager.nix` (exported as
   `homeManagerModules.default`; the flake sets
   `services.device-priority-sanitizer.package` via `lib.mkDefault`): options
@@ -477,6 +479,17 @@ device-priority-sanitizer auto             # hidden test seam
   the plist — `device-priority-sanitizer start` launches the app on demand.
   The launchd label is `<home.username>.device-priority-sanitizer` (read
   from `config.home.username`, no extraSpecialArg needed).
+- `scripts/package-macos.sh` — a separate non-Nix packaging path: builds an
+  unsigned, Apple Silicon-only `.pkg` with Xcode CLT
+  (`swiftc -target arm64-apple-macos26.0`), ad-hoc signs the app, installs it
+  to `/Applications` plus a `/usr/local/bin/device-priority-sanitizer`
+  symlink, and emits a SHA-256 checksum. `packaging/component.plist`
+  disables bundle relocation; `pkgbuild --min-os-version` plus the
+  distribution's volume check require macOS 26 (Tahoe). Raycast commands and
+  autostart are deliberately out of scope for the pkg — Login Items are the
+  user-facing autostart path. CI (`.github/workflows/ci.yml`, `package`)
+  installs the pkg on `macos-26` and exercises the CLI through the symlink;
+  `.github/workflows/release.yml` publishes the pkg + checksum on `v*` tags.
 - The Raycast `set-output`/`set-input`/`set-camera` commands are **generated
   in the HM module**, not shipped by the package: their static tier
   dropdown must embed `cfg.outputs`/`cfg.inputs`/`cfg.cameras` titles
@@ -491,21 +504,23 @@ device-priority-sanitizer auto             # hidden test seam
   `bats`, `jq`, `nixfmt`, `shellcheck`, `shfmt`, `convco`, `nixd`, `git`,
   `gh`.
 - Hooks (git-hooks.nix, mirrored from the origin config repo): `nixfmt`,
-  `convco` (commit-msg), `shellcheck` + `shfmt` (scoped to `raycast/` and
-  `test/` with `types = []` + `--shell=bash` + `SC2239` exclusion so the
-  `@bash@` placeholder shebangs are handled). `swift-format` is deliberately
+  `convco` (commit-msg), `shellcheck` + `shfmt` (scoped to `raycast/`,
+  `test/`, and `scripts/` with `types = []` + `--shell=bash` + `SC2239`
+  exclusion so the `@bash@` placeholder shebangs are handled). `swift-format` is deliberately
   a flake check, not a hook (Swift toolchain too heavy for every invocation).
 - Verification: `nix flake check` (builds package, runs `unit`, `cli`,
   `format`, and the pre-commit check) and `nix build .#default`. Quick
   evaluation-only pass: `nix flake check --no-build`.
-- CI (`.github/workflows/ci.yml`): macOS Tahoe runner (`macos-26`), Nix via
-  DeterminateSystems installer, one job running `nix flake check` (covers
-  the package, unit/CLI tests, swift-format, and pre-commit) on push/PR/tags.
+- CI (`.github/workflows/ci.yml`): a `check` job on `macos-26` with Nix
+  (`nix flake check`) and a `package` job on `macos-26` without Nix that
+  builds, installs, and exercises the installer. Both run on push/PR/tags.
 - Release process: bump the version in exactly two places
   (`Sources/DevicePrioritySanitizer/Command.swift` `programVersion` and
   `Info.plist` `CFBundleShortVersionString`; the nix package reads its
   `version` from Info.plist), commit with a conventional message, and tag an
-  annotated `vX.Y.Z`.
+  annotated `vX.Y.Z`. The tag build (`release.yml`) packages the macOS
+  installer and publishes the `.pkg` + SHA-256 checksum; the installer is
+  unsigned and arm64-only for now.
 - History note: this repo was extracted from a private config repository;
   `git-filter-repo` preserved the full app history, including the
   pre-rename `audio-priority-sanitizer` era and the Home Manager module

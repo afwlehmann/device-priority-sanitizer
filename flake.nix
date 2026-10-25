@@ -51,7 +51,7 @@
                 # SC2239: shebang not an absolute path (placeholder, substituted
                 # at build time)
                 types = [ ];
-                files = "^(raycast/|test/)";
+                files = "^(raycast/|test/|scripts/)";
                 excludes = [
                   "\\.(json|plist|md)$"
                 ];
@@ -70,7 +70,7 @@
                 # we must clear both. Dialect, indent, and simplify come from
                 # .editorconfig's [[bash]]/[[bats]] sections.
                 types = [ ];
-                files = "^(raycast/|test/)";
+                files = "^(raycast/|test/|scripts/)";
                 excludes = [
                   "\\.(json|plist|md)$"
                 ];

@@ -1377,6 +1377,24 @@ func runUnitTests() {
         }
     }
 
+    run("app bundle derivation resolves a package CLI symlink into the bundle layout") {
+        try withTempDirectory { directory in
+            let bundleContents = directory + "/Test.app/Contents/MacOS"
+            let binDirectory = directory + "/bin"
+            try FileManager.default.createDirectory(atPath: bundleContents, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(atPath: binDirectory, withIntermediateDirectories: true)
+            let binary = bundleContents + "/device-priority-sanitizer"
+            try Data("x".utf8).write(to: URL(fileURLWithPath: binary))
+            let symlink = binDirectory + "/device-priority-sanitizer"
+            try FileManager.default.createSymbolicLink(atPath: symlink, withDestinationPath: binary)
+            try expectEqual(
+                appBundlePath(executable: symlink, override: nil),
+                directory + "/Test.app",
+                "package CLI symlink resolves to the sibling bundle"
+            )
+        }
+    }
+
     run("plist label parsing reads the Label key and rejects garbage") {
         let xml = """
             <?xml version="1.0" encoding="UTF-8"?>

@@ -36,6 +36,7 @@ pkgs.stdenv.mkDerivation {
     mkdir -p build
     swiftc -O \
       -module-name device_priority_sanitizer_module \
+      -target arm64-apple-macos26.0 \
       -o build/device-priority-sanitizer \
       Sources/DevicePrioritySanitizer/*.swift
     runHook postBuild
