@@ -9,7 +9,7 @@ program_name="device-priority-sanitizer"
 version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$root/Info.plist")"
 
 release_tag="${RELEASE_TAG:-}"
-if [[ -n "$release_tag" && "$release_tag" != "v$version" ]]; then
+if [[ -n $release_tag && $release_tag != "v$version" ]]; then
   echo "release tag $release_tag does not match Info.plist version $version" >&2
   exit 1
 fi
@@ -36,7 +36,7 @@ app_bundle="$build_dir/$app_name.app"
 mkdir -p "$app_bundle/Contents/MacOS"
 install -m 0755 "$build_dir/$program_name" "$app_bundle/Contents/MacOS/$program_name"
 install -m 0644 "$root/Info.plist" "$app_bundle/Contents/Info.plist"
-printf 'APPL????' > "$app_bundle/Contents/PkgInfo"
+printf 'APPL????' >"$app_bundle/Contents/PkgInfo"
 codesign --force --sign - "$app_bundle/Contents/MacOS/$program_name"
 codesign --force --sign - "$app_bundle"
 
@@ -53,7 +53,7 @@ pkgbuild --root "$payload" \
   --ownership recommended \
   "$component_pkg"
 
-cat > "$build_dir/distribution.xml" <<XML
+cat >"$build_dir/distribution.xml" <<XML
 <?xml version="1.0" encoding="UTF-8"?>
 <installer-gui-script minSpecVersion="2">
   <title>$app_name</title>
@@ -75,7 +75,7 @@ cat > "$build_dir/distribution.xml" <<XML
 XML
 
 productbuild --distribution "$build_dir/distribution.xml" --package-path "$build_dir" "$product_pkg"
-(cd "$dist_dir" && shasum -a 256 "$(basename "$product_pkg")" > "$(basename "$product_pkg").sha256")
+(cd "$dist_dir" && shasum -a 256 "$(basename "$product_pkg")" >"$(basename "$product_pkg").sha256")
 
 echo "$product_pkg"
 echo "$product_pkg.sha256"
