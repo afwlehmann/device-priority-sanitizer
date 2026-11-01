@@ -308,20 +308,21 @@ func autoSymbol(_ device: MediaDevice, _ target: Target) -> String {
         case .bluetooth: return "headphones"
         case .builtIn: return "laptopcomputer"
         case .displayPort, .thunderbolt: return "display"
-        case .usb: return "hifispeaker.fill"
+        case .usb: return "speaker.circle.fill"
         default: return "speaker.wave.3"
         }
     case .input:
         switch device.transportClass {
         case .bluetooth: return "headphones"
         case .builtIn: return "laptopcomputer"
+        case .usb: return "microphone.fill"
         default: return "mic"
         }
     case .camera:
         switch device.transportClass {
         case .continuity: return "iphone"
         case .builtIn: return "laptopcomputer"
-        default: return "video"
+        default: return "web.camera.fill"
         }
     }
 }

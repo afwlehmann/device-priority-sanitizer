@@ -143,9 +143,9 @@ AppKit window (`ConfigWindow.swift`) over a pure model
 Adding a device writes `{title: unique name, match: "^escaped-name$",
 symbol: auto}` — anchored exact patterns (a name containing another
 device's name cannot capture it), deduplicated titles (`Name (2)`), symbols
-derived from transport (headphones / hifispeaker.fill / laptopcomputer /
-mic / iphone / video). v1 has no symbol picker, tier renaming, or regex
-editor; symbols stay editable in the JSON.
+derived from transport (headphones / speaker.circle.fill / microphone.fill /
+laptopcomputer / iphone / web.camera.fill). v1 has no symbol picker, tier
+renaming, or regex editor; symbols stay editable in the JSON.
 
 - **Editing model**: explicit **Save** (atomic write + apply), **Revert**
   (reload from disk), **Reload** (discarding-unsaved prompt), unsaved-close
@@ -350,9 +350,10 @@ An invalid name (e.g. `laptop-foo`) fails silently —
 
 Unlike tier regexes there is no fail-fast validation at startup; symbols
 resolve only where they render. Module defaults: `headphones`,
-`hifispeaker.fill`, `laptopcomputer`, `mic`, `speaker.wave.3`, `video`,
-`iphone`, `display`, plus the built-in `questionmark.circle` (excluded
-current) and `pause.circle` (disabled switch).
+`speaker.circle.fill`, `microphone.fill`, `laptopcomputer`, `mic`,
+`speaker.wave.3`, `web.camera.fill`, `iphone`, `display`, plus the built-in
+`questionmark.circle` (excluded current) and `pause.circle` (disabled
+switch).
 
 ## Test seams
 

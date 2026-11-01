@@ -790,14 +790,17 @@ func runUnitTests() {
     run("autoSymbol derives from transport and target") {
         let devices = Fixtures.devices()
         let evolve = devices.first { $0.uid == "evolve" }!
+        let jabra510 = devices.first { $0.uid == "jabra510" }!
         let dell = devices.first { $0.uid == "dell" }!
         let facetime = devices.first { $0.uid == "facetime" }!
         let camlink = devices.first { $0.uid == "camlink" }!
         try expectEqual(autoSymbol(evolve, .output), "headphones", "bluetooth output")
         try expectEqual(autoSymbol(evolve, .input), "headphones", "bluetooth input")
+        try expectEqual(autoSymbol(jabra510, .output), "speaker.circle.fill", "usb output")
+        try expectEqual(autoSymbol(jabra510, .input), "microphone.fill", "usb input")
         try expectEqual(autoSymbol(dell, .output), "display", "displayPort output")
         try expectEqual(autoSymbol(facetime, .camera), "laptopcomputer", "built-in camera")
-        try expectEqual(autoSymbol(camlink, .camera), "video", "external camera")
+        try expectEqual(autoSymbol(camlink, .camera), "web.camera.fill", "external camera")
     }
 
     run("document rows split covered, uncovered, and unmanaged devices") {

@@ -221,7 +221,7 @@ in
         {
           title = "Speaker";
           match = "SPEAK 510";
-          symbol = "hifispeaker.fill";
+          symbol = "speaker.circle.fill";
         }
         {
           title = "Built-in";
@@ -246,7 +246,7 @@ in
         {
           title = "Speaker";
           match = "SPEAK 510";
-          symbol = "hifispeaker.fill";
+          symbol = "microphone.fill";
         }
         {
           title = "Built-in";
