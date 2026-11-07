@@ -117,12 +117,18 @@ final class MenuController: NSObject {
 
     // MARK: - Status image
 
+    /// Point size of the menubar symbols — smaller than the system default so
+    /// the three-slot composite stays compact.
+    private static let symbolPointSize: CGFloat = 11
+
     static func statusImage(symbols: [(symbol: String, description: String)]) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .regular)
         let images = symbols.compactMap { symbol, description in
-            NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+            NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
+                .withSymbolConfiguration(configuration)
         }
         guard images.count == symbols.count, !images.isEmpty else { return nil }
-        let gap: CGFloat = 3
+        let gap: CGFloat = 2
         let width = images.reduce(0) { $0 + $1.size.width } + gap * CGFloat(images.count - 1)
         let height = images.map(\.size.height).max() ?? 0
         let image = NSImage(size: NSSize(width: width, height: height))
