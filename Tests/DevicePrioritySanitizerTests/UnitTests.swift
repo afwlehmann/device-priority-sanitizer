@@ -323,6 +323,42 @@ func runUnitTests() {
         try expectEqual(engine.slotSymbol(for: nil, target: .camera), "video", "camera no-device fallback")
     }
 
+    run("symbol weight scales normalize ink area to the group mean") {
+        // Equal areas: the mean is the value itself, nothing moves.
+        try expectEqual(symbolWeightScales(inkAreas: [85, 85, 85]), [1, 1, 1], "equal areas")
+        // 11 pt measured set (heavier laptop vs lighter headphones): the
+        // laptop shrinks, the headphones grow, both land on the same ink.
+        let mixed = symbolWeightScales(inkAreas: [85, 38, 38])
+        try check(abs(mixed[0] - 0.85) < 1e-9, "heavy glyph shrinks to the range floor")
+        try check(abs(mixed[1] - (161.0 / 3.0 / 38).squareRoot()) < 1e-9, "light glyph grows")
+        try check(abs(mixed[1] - mixed[2]) < 1e-9, "equal areas get equal scales")
+        // Unclamped pair: proportional scaling makes both glyphs land on the
+        // shared target ink.
+        let paired = symbolWeightScales(inkAreas: [85, 50])
+        try check(
+            abs(paired[0] * paired[0] * 85 - 67.5) < 1e-9
+                && abs(paired[1] * paired[1] * 50 - 67.5) < 1e-9,
+            "ink equalizes to the group mean"
+        )
+    }
+
+    run("symbol weight scales clamps outliers and skips failed measurements") {
+        // Extreme spread: both ends clamp into the default range.
+        let clamped = symbolWeightScales(inkAreas: [100, 1])
+        try expectEqual(clamped[0], 0.85, "heavy outlier clamps to the floor")
+        try expectEqual(clamped[1], 1.3, "light outlier clamps to the ceiling")
+        // A render failure (zero area) must not poison the target and must
+        // leave its own glyph at base size.
+        let zeroed = symbolWeightScales(inkAreas: [0, 85, 85])
+        try expectEqual(zeroed, [1, 1, 1], "zero areas are skipped, uniform set stays at 1")
+        // All-zero input: nothing measurable, nothing changes.
+        try expectEqual(symbolWeightScales(inkAreas: [0, 0]), [1, 1], "all-zero input")
+        try expectEqual(symbolWeightScales(inkAreas: []), [] as [CGFloat], "empty input")
+        // Explicit range still applies.
+        let narrowed = symbolWeightScales(inkAreas: [100, 1], range: 0.9...1.1)
+        try expectEqual(narrowed, [0.9, 1.1], "explicit range")
+    }
+
     // MARK: Config decoding
 
     run("config JSON decodes and provides fallbacks") {

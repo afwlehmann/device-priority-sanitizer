@@ -343,6 +343,17 @@ An invalid name (e.g. `laptop-foo`) fails silently —
 - **Menubar status image**: `statusImage` requires every slot symbol to
   resolve; one invalid name makes the whole composite nil — no menubar
   icon at all on launch (or the previous image sticks after a refresh).
+  The composite renders at an 11 pt base and **normalizes each glyph's ink
+  area to the group mean** (`symbolWeightScales`, clamped to
+  `0.85…1.3`): SF Symbols differ wildly in optical size at one point size
+  (a wide `laptopcomputer` dwarfs a thin `mic`), and a mixed set — built-in
+  output next to a headset input — otherwise renders the thin glyphs as
+  visibly tiny. Rasterizing a glyph to measure its ink is a UI-layer
+  effect; the scale math is pure and unit-tested. An all-equal-ink set
+  (all slots on the same symbol) is untouched; total ink is preserved by
+  the mean target, so the composite neither grows nor shrinks overall —
+  only redistributes. Menu rows and the config window keep default symbol
+  sizing.
 - **Menu and config-window rows**: the row renders without its icon; the
   text is unaffected.
 - **CLI** (`menu-text`, `list --json`): symbols are opaque strings — the

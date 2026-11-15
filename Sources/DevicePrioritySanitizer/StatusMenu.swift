@@ -19,6 +19,28 @@ final class ActionPayload: NSObject {
     }
 }
 
+/// Pure visual-weight normalization for a set of menubar glyphs: SF Symbols
+/// have wildly different ink coverage at one point size (a wide
+/// `laptopcomputer` dwarfs a thin `mic`), so each glyph's measured ink area
+/// is scaled toward the group mean. The target is the mean of the *positive*
+/// areas, so an all-laptop set stays untouched and mixed sets redistribute
+/// ink instead of growing or shrinking the composite overall. `range` keeps
+/// outliers sane — a heavy glyph never becomes unrecognizable, a light one
+/// never balloons. Zero measurements (render failed) leave the glyph at its
+/// base size.
+func symbolWeightScales(
+    inkAreas: [CGFloat],
+    range: ClosedRange<CGFloat> = 0.85...1.3
+) -> [CGFloat] {
+    let positive = inkAreas.filter { $0 > 0 }
+    guard !positive.isEmpty else { return inkAreas.map { _ in 1 } }
+    let mean = positive.reduce(0, +) / CGFloat(positive.count)
+    return inkAreas.map { area in
+        guard area > 0 else { return 1 }
+        return min(max((mean / area).squareRoot(), range.lowerBound), range.upperBound)
+    }
+}
+
 /// Owns the `NSStatusItem`: the three-symbol menubar image and the dropdown.
 ///
 /// Menubar: [speaker slot][microphone slot][camera slot], each an SF Symbol
@@ -121,20 +143,76 @@ final class MenuController: NSObject {
     /// the three-slot composite stays compact.
     private static let symbolPointSize: CGFloat = 11
 
-    static func statusImage(symbols: [(symbol: String, description: String)]) -> NSImage? {
-        let configuration = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .regular)
-        let images = symbols.compactMap { symbol, description in
-            NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
-                .withSymbolConfiguration(configuration)
+    /// Ink area of a symbol image in pt²: rasterized at `scale`× resolution,
+    /// counting pixels whose alpha exceeds the visibility threshold. UI-layer
+    /// effect feeding `symbolWeightScales` — the scale math itself is pure
+    /// and unit-tested.
+    private static func inkArea(of image: NSImage, scale: CGFloat = 4) -> CGFloat {
+        let width = Int(ceil(image.size.width * scale))
+        let height = Int(ceil(image.size.height * scale))
+        guard width > 0, height > 0 else { return 0 }
+        guard
+            let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil,
+                pixelsWide: width,
+                pixelsHigh: height,
+                bitsPerSample: 8,
+                samplesPerPixel: 4,
+                hasAlpha: true,
+                isPlanar: false,
+                colorSpaceName: .deviceRGB,
+                bytesPerRow: 0,
+                bitsPerPixel: 0
+            )
+        else { return 0 }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: rep.pixelsWide, height: rep.pixelsHigh))
+        NSGraphicsContext.restoreGraphicsState()
+        var count = 0
+        for y in 0..<height {
+            for x in 0..<width {
+                if (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 { count += 1 }
+            }
         }
-        guard images.count == symbols.count, !images.isEmpty else { return nil }
+        return CGFloat(count) / (scale * scale)
+    }
+
+    /// How far a symbol's point size may deviate from the base while being
+    /// ink-weight-normalized: keeps a wide `laptopcomputer` recognizable and
+    /// stops a thin `mic` from ballooning into a huge glyph.
+    private static let symbolWeightRange: ClosedRange<CGFloat> = 0.85...1.3
+
+    static func statusImage(symbols: [(symbol: String, description: String)]) -> NSImage? {
+        let originals = symbols.compactMap { symbol, description in
+            NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+        }
+        guard originals.count == symbols.count, !originals.isEmpty else { return nil }
+        let baseConfiguration = NSImage.SymbolConfiguration(pointSize: symbolPointSize, weight: .regular)
+        let baseImages = originals.compactMap { $0.withSymbolConfiguration(baseConfiguration) }
+        guard baseImages.count == originals.count else { return nil }
+        // Normalize every glyph's ink area to the group mean (see
+        // `symbolWeightScales`) and re-render at the adjusted point size —
+        // crisp vector output instead of bitmap-scaling.
+        let scales = symbolWeightScales(
+            inkAreas: baseImages.map { inkArea(of: $0) },
+            range: symbolWeightRange
+        )
+        let images = zip(originals, scales).map { image, scale -> NSImage? in
+            let configuration = NSImage.SymbolConfiguration(
+                pointSize: symbolPointSize * scale, weight: .regular
+            )
+            return image.withSymbolConfiguration(configuration)
+        }
+        let composed = images.compactMap(\.self)
+        guard composed.count == originals.count, !composed.isEmpty else { return nil }
         let gap: CGFloat = 2
-        let width = images.reduce(0) { $0 + $1.size.width } + gap * CGFloat(images.count - 1)
-        let height = images.map(\.size.height).max() ?? 0
+        let width = composed.reduce(0) { $0 + $1.size.width } + gap * CGFloat(composed.count - 1)
+        let height = composed.map(\.size.height).max() ?? 0
         let image = NSImage(size: NSSize(width: width, height: height))
         image.lockFocus()
         var x: CGFloat = 0
-        for symbol in images {
+        for symbol in composed {
             symbol.draw(
                 in: NSRect(
                     x: x,
