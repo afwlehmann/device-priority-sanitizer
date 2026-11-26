@@ -2,7 +2,7 @@ import Foundation
 
 let programName = "device-priority-sanitizer"
 
-let programVersion = "0.9.2"
+let programVersion = "0.10.0"
 
 func logStderr(_ message: String) {
     FileHandle.standardError.write(Data("[\(programName)] \(message)\n".utf8))
