@@ -89,6 +89,13 @@ assert_output_is_not_empty_by_jq() {
   assert_has_line "  - Current: Microsoft Teams Audio (not managed)"
 }
 
+@test "menu-text: AirPlay output is listed but virtual devices stay hidden" {
+  run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-airplay.json" menu-text
+  assert_success
+  assert_has_line "  · Living Room HomePod [airplayaudio]"
+  refute_line_matches "Microsoft Teams Audio"
+}
+
 @test "reapply is explicit and bypasses the excluded-current guard" {
   run $BIN --config "${FIXTURES}/config.json" --devices "${FIXTURES}/devices-excluded-current.json" --dry-run reapply
   assert_success

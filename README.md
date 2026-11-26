@@ -27,7 +27,9 @@ Device Priority Sanitizer adds:
 - **Manual overrides that persist** — a manual pick stays until that target's
   device set changes, then auto-selection resumes
 - **Synthetic devices are left alone** — virtual, aggregate, AirPlay, and Desk
-  View devices are recognised and never auto-selected
+  View devices are recognised and never auto-selected; AirPlay outputs that
+  are already connected at the system level can still be picked manually from
+  the menubar
 - **Per-device saved volume levels**, restored whenever a device is activated
 - **Camera prioritization** via the macOS system-preferred camera (apps that
   follow the system default pick it up)

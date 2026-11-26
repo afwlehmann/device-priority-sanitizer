@@ -758,7 +758,7 @@ func renderMenu(
                 // touch it — say so instead of silently hiding it.
                 lines.append("  - Current: \(current.name) (not managed)")
             }
-            let rows: [String] = engine.orderedManagedDevices(target, devices: devices)
+            let rows: [String] = engine.orderedSelectableDevices(target, devices: devices)
                 .map { device in
                     let check = source.defaultDevice(for: target)?.uid == device.uid ? "✓" : "·"
                     let symbol = engine.entrySymbol(for: device, target: target)

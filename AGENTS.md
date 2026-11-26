@@ -73,6 +73,11 @@ via plain `swiftc`.
   - A synthetic-transport current device (virtual/aggregate/AirPlay/Desk
     View) is left untouched by auto-selection, and surfaced in the UI as
     `questionmark.circle` + a "not managed" menu row.
+  - AirPlay is synthetic (never managed, never in tiers, skipped by cycle)
+    but `isSelectable`: the menu and `menu-text` list it after the managed
+    devices (`orderedSelectableDevices`, symbol `airplayaudio`) so it can be
+    picked manually. Only receivers already connected at the system level
+    appear in CoreAudio's device list.
   - `reapply` (menu/CLI/Raycast) is an explicit user action and bypasses the
     excluded-current guard.
   - **Global switch**: the runtime state file (`State.swift`,

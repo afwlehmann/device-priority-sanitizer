@@ -300,7 +300,7 @@ final class MenuController: NSObject {
 
         // Out-of-domain current device: the app deliberately does not touch
         // it — say so instead of silently hiding it.
-        let managedDevices = engine.orderedManagedDevices(target, devices: devices)
+        let managedDevices = engine.orderedSelectableDevices(target, devices: devices)
         let infoItem: NSMenuItem? = current.flatMap { currentDevice in
             guard !currentDevice.isManaged else { return nil }
             let item = NSMenuItem(

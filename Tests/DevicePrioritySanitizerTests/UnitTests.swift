@@ -116,6 +116,26 @@ func runUnitTests() {
         )
     }
 
+    run("AirPlay is selectable from the menu but never managed or auto-picked") {
+        let engine = try Fixtures.engine()
+        let airplay = MediaDevice(
+            uid: "homepod", name: "Living Room HomePod", transportClass: .airPlay, deviceType: nil,
+            capabilities: [.output])
+        let devices = Fixtures.devices() + [airplay]
+        try check(
+            !engine.orderedManagedDevices(.output, devices: devices).contains { $0.uid == "homepod" },
+            "AirPlay must stay out of the managed list"
+        )
+        let selectable = engine.orderedSelectableDevices(.output, devices: devices)
+        try check(selectable.last?.uid == "homepod", "AirPlay is appended to the menu list")
+        try check(!selectable.contains { $0.uid == "teams" }, "virtual devices stay hidden")
+        try check(
+            engine.targetDevice(.output, current: nil, devices: devices)?.uid != "homepod",
+            "auto-selection never picks AirPlay"
+        )
+        try check(engine.entrySymbol(for: airplay, target: .output) == "airplayaudio", "AirPlay symbol")
+    }
+
     run("output and input are independent") {
         let engine = try Fixtures.engine()
         let outputOnly = Fixtures.devices().filter { $0.supports(.output) }

@@ -90,6 +90,16 @@ final class PriorityEngine: Sendable {
         }
     }
 
+    /// Devices pickable from the menu: the managed order, then selectable but
+    /// unmanaged devices (AirPlay) alphabetically. Never used for auto-selection.
+    func orderedSelectableDevices(_ target: Target, devices: [MediaDevice]) -> [MediaDevice] {
+        let extras =
+            devices
+            .filter { $0.supports(target) && !$0.isManaged && $0.isSelectable }
+            .sorted { $0.name.compare($1.name, options: .caseInsensitive) == .orderedAscending }
+        return orderedManagedDevices(target, devices: devices) + extras
+    }
+
     /// The device auto-selection would pick for `target`, if any.
     ///
     /// Within the winning tier, the current device is kept when it already
@@ -180,7 +190,7 @@ final class PriorityEngine: Sendable {
         entries(for: target)
             .first(where: { matches($0, device.name) })?
             .symbol
-            ?? config.fallback(for: target)
+            ?? (device.transportClass == .airPlay ? "airplayaudio" : config.fallback(for: target))
     }
 
     /// SF Symbol for the menubar slot of `target` given its current device.

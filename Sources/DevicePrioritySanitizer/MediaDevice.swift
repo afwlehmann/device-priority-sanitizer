@@ -76,6 +76,10 @@ struct MediaDevice: Hashable, Sendable {
 
     var isManaged: Bool { !transportClass.isSynthetic }
 
+    /// Shown (and pickable) in the menu: managed devices plus AirPlay, which
+    /// stays out of auto-selection and tiers but can be chosen manually.
+    var isSelectable: Bool { isManaged || transportClass == .airPlay }
+
     func supports(_ target: Target) -> Bool {
         capabilities.contains(target)
     }
